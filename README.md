@@ -77,8 +77,21 @@ Explicit `-t`, `-r`, or `-depth` flags always override mode defaults.
 `-interactive` pauses between each phase so you can review results and pick which targets to continue with — useful for large scopes where you want to focus on specific subdomains or hosts before crawling.
 
 ### Output
-- **JSON** — structured, machine-readable, suitable for piping into other tools
+- **Text** *(default)* — human-readable tree report printed to the terminal; subdomains → hosts → endpoints with all metadata
+- **Markdown** — GitHub-flavored Markdown document; summary table, one section per subdomain/host, endpoint tables
 - **HTML** — dark-themed terminal-style report with collapsible sections, status-code badges, and technology tags; no external dependencies
+- **JSON** — structured, machine-readable, suitable for piping into other tools
+
+### Graceful Interrupt
+Pressing **Ctrl+C** during a scan pauses the active phase and asks two questions:
+
+```
+[!] Interrupt received.
+Cancel scan? [y/N]:
+Save partial results found so far? [Y/n]:
+```
+
+If you choose to save, whatever was collected up to that point (subdomains, hosts, endpoints) is written using the configured format and output file before the process exits. Choosing not to cancel resumes the scan transparently.
 
 ---
 
@@ -109,9 +122,19 @@ cyclops -d example.com -autotune -v
 cyclops -d example.com -interactive
 ```
 
-### HTML report
+### Save as HTML report
 ```bash
 cyclops -d example.com -format html -o report.html
+```
+
+### Save as Markdown
+```bash
+cyclops -d example.com -format md -o report.md
+```
+
+### Save as JSON
+```bash
+cyclops -d example.com -format json -o results.json
 ```
 
 ### Custom wordlist and resolvers
@@ -140,7 +163,7 @@ cyclops -d example.com -proxy http://127.0.0.1:8080 -v
 | `-passive-only` | Skip DNS brute force (passive sources only) | false |
 | `-w` | Subdomain wordlist file | built-in |
 | `-resolvers` | Comma-separated DNS resolvers (e.g. `8.8.8.8,1.1.1.1`) | `8.8.8.8:53` |
-| `-format` | Output format: `json`, `html` | `json` |
+| `-format` | Output format: `text`, `json`, `html`, `md` | `text` |
 | `-o` | Output file (default: stdout) | — |
 | `-proxy` | HTTP proxy URL | — |
 | `-timeout` | Per-request timeout in seconds | 10 |
@@ -150,8 +173,34 @@ cyclops -d example.com -proxy http://127.0.0.1:8080 -v
 
 ---
 
-## Output example
+## Output examples
 
+### Text (default)
+```
+╔══════════════════════════════════════╗
+║       Cyclops Scan Report            ║
+╚══════════════════════════════════════╝
+
+  Target     : example.com
+  Mode       : normal
+  Scan Time  : 2026-04-24 08:59:30 UTC
+  Subdomains : 1
+  Live Hosts : 1
+  Endpoints  : 1
+
+┌─ [SUBDOMAIN] www.example.com
+│   IP      : 93.184.216.34
+│   Sources : mixed
+│
+└── [HOST] https://www.example.com  [200]
+      Title  : Example Domain
+      Server : nginx
+      Tech   : Nginx, WordPress
+      Size   : 1256 bytes
+      ↳ https://www.example.com/robots.txt  [200]  (robots)
+```
+
+### JSON (`-format json`)
 ```json
 {
   "domain": "example.com",
@@ -164,19 +213,13 @@ cyclops -d example.com -proxy http://127.0.0.1:8080 -v
       "hosts": [
         {
           "url": "https://www.example.com",
-          "scheme": "https",
           "status_code": 200,
           "title": "Example Domain",
           "server": "nginx",
           "tech": ["Nginx", "WordPress"],
           "content_length": 1256,
           "endpoints": [
-            {
-              "url": "https://www.example.com/robots.txt",
-              "method": "GET",
-              "status_code": 200,
-              "source": "robots"
-            }
+            { "url": "https://www.example.com/robots.txt", "status_code": 200, "source": "robots" }
           ]
         }
       ]
