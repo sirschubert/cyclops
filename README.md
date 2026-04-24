@@ -187,39 +187,14 @@ cyclops -d example.com -proxy http://127.0.0.1:8080 -v
 
 ---
 
-## Project structure
-
-```
-cyclops/
-├── cmd/cyclops/main.go          # CLI entrypoint: flags, phases, interactive mode
-├── internal/
-│   ├── subdomains/
-│   │   ├── dns.go               # DNS resolver, brute force, zone transfer
-│   │   ├── cert.go              # Certificate transparency (crt.sh)
-│   │   └── engine.go            # Discovery engine combining all sources
-│   ├── hosts/
-│   │   ├── probe.go             # HTTP/HTTPS probing with stealth + autotune support
-│   │   └── fingerprint.go       # Technology detection from headers and body
-│   ├── endpoints/
-│   │   ├── crawler.go           # BFS web crawler with rate limiting
-│   │   ├── robots.go            # robots.txt and sitemap.xml parser
-│   │   └── wordlist.go          # Directory brute forcing
-│   ├── output/
-│   │   ├── json.go              # JSON formatter
-│   │   └── html.go              # Dark-theme HTML report
-│   └── utils/
-│       ├── pool.go              # Worker pool
-│       ├── rate.go              # Rate limiter + Autotuner
-│       └── retry.go             # Exponential backoff retry
-├── pkg/models/types.go          # Shared data structures
-└── wordlists/default.txt        # Built-in subdomain wordlist
-```
-
----
-
 ## Author
 
 Sir Schubert ([@sirschubert](https://github.com/sirschubert))
+> from one subnautica fan to the whole world with ❤️
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Disclaimer
 
