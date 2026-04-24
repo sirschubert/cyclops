@@ -36,5 +36,5 @@ Thumbs.db
 
 # OpenClaude files
 .openclaude-profile.json
-.openclaude/settings.local.json
-.claude/settings.local.json
+.openclaude/
+.claude/
