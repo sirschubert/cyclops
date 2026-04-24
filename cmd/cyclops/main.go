@@ -36,15 +36,12 @@ func (c clearLineWriter) Write(p []byte) (int, error) {
 // ── Color helpers ────────────────────────────────────────────────────────────
 
 var (
-    // "SUB" — warm amber to gold gradient, top to bottom
-    logoOrange = color.RGB(244, 138, 22)   // deep amber, dominant in SUB
-    logoGold   = color.RGB(245, 200, 80)   // lighter gold highlight
+    logoOrange = color.RGB(244, 138, 22)       
+		logoGold   = color.RGB(245, 200, 80)   
 
-    // "NAUTICA" — steel blue, slightly desaturated
-    logoBlue   = color.RGB(140, 195, 220)  // main body of NAUTICA letters
-    logoSteel  = color.RGB(180, 218, 235)  // highlight/shine on NAUTICA
+    logoBlue   = color.RGB(140, 195, 220) 
+    logoSteel  = color.RGB(180, 218, 235)  
 
-    // keep your utility colors
     cyan    = color.New(color.FgCyan)
     green   = color.New(color.FgGreen)
     yellow  = color.New(color.FgYellow)
