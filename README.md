@@ -67,31 +67,8 @@ Three built-in modes tune concurrency, rate, and stealth behaviour simultaneousl
 
 Explicit `-t`, `-r`, or `-depth` flags always override mode defaults.
 
-### Auto-Tune Rate Limiter
-`-autotune` starts at your configured rate and adjusts it automatically during the scan:
-- Every 30 seconds with no errors: `rate += 50 req/s`
-- On any 429 or 503 response: `rate /= 2` immediately
-- Floor: 10 req/s — Ceiling: 2000 req/s
-
 ### Interactive Mode
 `-interactive` pauses between each phase so you can review results and pick which targets to continue with — useful for large scopes where you want to focus on specific subdomains or hosts before crawling.
-
-### Output
-- **Text** *(default)* — human-readable tree report printed to the terminal; subdomains → hosts → endpoints with all metadata
-- **Markdown** — GitHub-flavored Markdown document; summary table, one section per subdomain/host, endpoint tables
-- **HTML** — dark-themed terminal-style report with collapsible sections, status-code badges, and technology tags; no external dependencies
-- **JSON** — structured, machine-readable, suitable for piping into other tools
-
-### Graceful Interrupt
-Pressing **Ctrl+C** during a scan pauses the active phase and asks two questions:
-
-```
-[!] Interrupt received.
-Cancel scan? [y/N]:
-Save partial results found so far? [Y/n]:
-```
-
-If you choose to save, whatever was collected up to that point (subdomains, hosts, endpoints) is written using the configured format and output file before the process exits. Choosing not to cancel resumes the scan transparently.
 
 ---
 
