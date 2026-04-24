@@ -1,5 +1,14 @@
-## Cyclops
 
+```
+                 ██████╗██╗   ██╗ ██████╗██╗      ██████╗ ██████╗ ███████╗
+                ██╔════╝╚██╗ ██╔╝██╔════╝██║     ██╔═══██╗██╔══██╗██╔════╝
+                ██║      ╚████╔╝ ██║     ██║     ██║   ██║██████╔╝███████╗
+                ██║       ╚██╔╝  ██║     ██║     ██║   ██║██╔═══╝ ╚════██║
+                ╚██████╗   ██║   ╚██████╗███████╗╚██████╔╝██║     ███████║
+                 ╚═════╝   ╚═╝    ╚═════╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝
+                 
+  ~ "Welcome aboard Captain, all systems online."                                         
+```
 A fast, all-in-one reconnaissance tool for bug bounty hunters and penetration testers. Cyclops combines subdomain enumeration, host discovery, and endpoint crawling into a single binary — no more juggling three separate tools.
 
 > *"Be advised: the Cyclops is designed to be operated by a three-person crew. Only experienced helms-people should attempt to pilot this vehicle solo."*
