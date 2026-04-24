@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,14 +22,17 @@ type Crawler struct {
 	visited     map[string]bool
 	endpoints   map[string]models.Endpoint
 	userAgent   string
+	userAgents  []string // stealth: rotate per request
 	timeout     time.Duration
 	concurrency int
-	rateLimiter *utils.RateLimiter
+	rateLimiter models.RateLimiterIface
+	stealthMode bool
+	reportCode  func(int)
 }
 
 // NewCrawler creates a new web crawler
 func NewCrawler(options models.ScanOptions) *Crawler {
- transport := &http.Transport{
+	transport := &http.Transport{
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
@@ -46,16 +50,35 @@ func NewCrawler(options models.ScanOptions) *Crawler {
 		}
 	}
 
+	// Use shared rate limiter if provided (e.g. autotune), otherwise create one.
+	var rl models.RateLimiterIface
+	if options.RateLimiter != nil {
+		rl = options.RateLimiter
+	} else {
+		rl = utils.NewRateLimiter(options.Rate)
+	}
+
 	return &Crawler{
 		client:      client,
 		maxDepth:    options.Depth,
 		visited:     make(map[string]bool),
 		endpoints:   make(map[string]models.Endpoint),
 		userAgent:   options.UserAgent,
+		userAgents:  options.UserAgents,
 		timeout:     time.Duration(options.Timeout) * time.Second,
 		concurrency: options.Threads,
-		rateLimiter: utils.NewRateLimiter(options.Rate),
+		rateLimiter: rl,
+		stealthMode: options.Mode == "stealth",
+		reportCode:  options.ReportCode,
 	}
+}
+
+// pickUserAgent returns the UA to use for the next request.
+func (c *Crawler) pickUserAgent() string {
+	if len(c.userAgents) > 0 {
+		return c.userAgents[rand.IntN(len(c.userAgents))]
+	}
+	return c.userAgent
 }
 
 // Crawl discovers endpoints from a given URL up to max depth.
@@ -71,58 +94,46 @@ func (c *Crawler) Crawl(ctx context.Context, baseURL string) ([]models.Endpoint,
 		return nil, fmt.Errorf("invalid base URL: %w", err)
 	}
 
-	// Start crawling from the base URL
 	queue := []urlVisit{{URL: parsedBase, Depth: 0}}
 
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
 
-		// Check context cancellation
 		select {
 		case <-ctx.Done():
 			return c.getEndpoints(), ctx.Err()
 		default:
 		}
 
-		// Skip if we've reached max depth
 		if current.Depth > c.maxDepth {
 			continue
 		}
 
-		// Skip if already visited
 		urlStr := current.URL.String()
 		if c.visited[urlStr] {
 			continue
 		}
 		c.visited[urlStr] = true
 
-		// Fetch the page
 		endpoints, links, err := c.fetchAndParse(ctx, current.URL)
 		if err != nil {
-			// Log error but continue crawling
 			continue
 		}
 
-		// Add discovered endpoints
 		for _, endpoint := range endpoints {
 			if _, exists := c.endpoints[endpoint.URL]; !exists {
 				c.endpoints[endpoint.URL] = endpoint
 			}
 		}
 
-		// Add links to queue for further crawling (but not beyond max depth)
 		if current.Depth < c.maxDepth {
 			for _, link := range links {
 				parsedLink, err := url.Parse(link)
 				if err != nil {
 					continue
 				}
-
-				// Resolve relative URLs
 				resolvedURL := current.URL.ResolveReference(parsedLink)
-
-				// Only crawl same domain
 				if resolvedURL.Host == parsedBase.Host {
 					queue = append(queue, urlVisit{URL: resolvedURL, Depth: current.Depth + 1})
 				}
@@ -147,14 +158,22 @@ func (c *Crawler) fetchAndParse(ctx context.Context, u *url.URL) ([]models.Endpo
 		}
 	}
 
+	// Stealth: random 1–4 s delay between requests.
+	if c.stealthMode {
+		delay := time.Duration(1+rand.IntN(3)) * time.Second
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if c.userAgent != "" {
-		req.Header.Set("User-Agent", c.userAgent)
-	}
+	req.Header.Set("User-Agent", c.pickUserAgent())
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -162,7 +181,10 @@ func (c *Crawler) fetchAndParse(ctx context.Context, u *url.URL) ([]models.Endpo
 	}
 	defer resp.Body.Close()
 
-	// Create endpoint for this URL
+	if c.reportCode != nil {
+		c.reportCode(resp.StatusCode)
+	}
+
 	endpoint := models.Endpoint{
 		URL:        u.String(),
 		Method:     "GET",
@@ -170,7 +192,6 @@ func (c *Crawler) fetchAndParse(ctx context.Context, u *url.URL) ([]models.Endpo
 		Source:     "crawler",
 	}
 
-	// Read response headers
 	headers := make(map[string]string)
 	for key, values := range resp.Header {
 		if len(values) > 0 {
@@ -179,16 +200,12 @@ func (c *Crawler) fetchAndParse(ctx context.Context, u *url.URL) ([]models.Endpo
 	}
 	endpoint.Headers = headers
 
-	// Read body for link extraction
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return []models.Endpoint{endpoint}, nil, nil
 	}
 
-	// Extract links from HTML
 	links := c.extractLinks(body, u)
-
-	// Return the endpoint and discovered links
 	return []models.Endpoint{endpoint}, links, nil
 }
 
@@ -216,8 +233,6 @@ func (c *Crawler) extractLinks(body []byte, baseURL *url.URL) []string {
 				attrName = "src"
 			case "form":
 				attrName = "action"
-			default:
-				// Continue to children
 			}
 
 			if attrName != "" {
@@ -229,7 +244,6 @@ func (c *Crawler) extractLinks(body []byte, baseURL *url.URL) []string {
 				}
 
 				if attrValue != "" {
-					// Resolve relative URLs
 					if parsedURL, err := url.Parse(attrValue); err == nil {
 						resolvedURL := baseURL.ResolveReference(parsedURL)
 						links = append(links, resolvedURL.String())

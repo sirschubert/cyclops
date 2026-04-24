@@ -1,131 +1,157 @@
 ## Cyclops
- 
+
 A fast, all-in-one reconnaissance tool for bug bounty hunters and penetration testers. Cyclops combines subdomain enumeration, host discovery, and endpoint crawling into a single binary — no more juggling three separate tools.
- 
+
 > *"Be advised: the Cyclops is designed to be operated by a three-person crew. Only experienced helms-people should attempt to pilot this vehicle solo."*
 > — Alterra
- 
+
 ---
-# Features
-
-### Subdomain Enumeration
-- **Certificate Transparency**: Query crt.sh for certificate-based subdomain discovery
-- **DNS Brute Force**: Multi-threaded DNS resolution with customizable wordlists
-- **Zone Transfer**: Attempt DNS zone transfers for exposed subdomains
-- **Wildcard Detection**: Automatically detects and warns about wildcard DNS records
-- **Multi-Resolver Support**: Round-robin DNS resolution across multiple nameservers
-
-### Host Discovery
-- **HTTP/HTTPS Probing**: Fast concurrent probing with configurable timeouts
-- **Response Analysis**: Capture status codes, titles, headers, and content length
-- **Technology Fingerprinting**: Identify server technologies from headers
-
-### Endpoint Discovery
-- **Web Crawler**: Recursive breadth-first crawling with configurable depth
-- **Robots.txt Parsing**: Extract disallowed paths and sitemap references
-- **Sitemap.xml Parsing**: Parse XML sitemaps including nested sitemap indexes
-- **Link Extraction**: Parse HTML for href, src, and action attributes
-
-### Output Formats
-- **JSON**: Structured, machine-readable output for easy integration
-- **HTML**: Visual report with color-coded status codes and organized layout
-
-### Advanced Features
-- **Rate Limiting**: Configurable requests per second with token bucket algorithm
-- **Proxy Support**: Route traffic through HTTP/HTTPS proxies
-- **Custom DNS Resolvers**: Use specific nameservers for DNS queries
-- **Timeout Controls**: Per-request and total scan timeout support
-- **Passive-Only Mode**: Skip active DNS brute force for stealth scanning
-- **Structured Logging**: Debug and warning levels with `log/slog`
 
 ## Installation
 
-### From Source
+### go install (recommended)
+```bash
+go install github.com/sirschubert/cyclops/cmd/cyclops@latest
+```
+
+The binary will be placed in `$GOPATH/bin` (or `$HOME/go/bin`). Make sure that directory is on your `$PATH`.
+
+### From source
 ```bash
 git clone https://github.com/sirschubert/cyclops.git
 cd cyclops
-go build ./cmd/cyclops
+go build -o cyclops ./cmd/cyclops
 ```
 
 ### Requirements
-- Go 1.19 or higher
+Go 1.22 or higher.
+
+---
+
+## Features
+
+### Subdomain Enumeration
+- **Certificate Transparency** — query crt.sh for certificate-based subdomain discovery
+- **DNS Brute Force** — multi-threaded DNS resolution with a built-in or custom wordlist
+- **Zone Transfer** — attempt DNS zone transfers across all nameservers
+- **Wildcard Detection** — detects wildcard DNS records and skips useless brute force
+- **Multi-Resolver Support** — round-robin DNS resolution across multiple nameservers
+
+### Host Discovery
+- **HTTP/HTTPS Probing** — concurrent probing with configurable timeouts and redirect following
+- **Response Analysis** — status codes, page titles, headers, content length
+- **Technology Fingerprinting** — identify server software from response headers and body signatures
+
+### Endpoint Discovery
+- **Web Crawler** — breadth-first crawling with configurable depth
+- **robots.txt / sitemap.xml** — extract disallowed paths and nested sitemap entries
+- **Link Extraction** — follows `href`, `src`, and `form action` attributes
+
+### Scan Modes
+Three built-in modes tune concurrency, rate, and stealth behaviour simultaneously:
+
+| Mode | Workers | Rate | Depth | Extras |
+|------|---------|------|-------|--------|
+| `normal` (default) | 50 | 500 req/s | 2 | — |
+| `stealth` | 5 | 10 req/s | 2 | passive-only, 1–4 s random delay, browser UA rotation |
+| `aggressive` | 200 | 2000 req/s | 4 | all sources enabled |
+
+Explicit `-t`, `-r`, or `-depth` flags always override mode defaults.
+
+### Auto-Tune Rate Limiter
+`-autotune` starts at your configured rate and adjusts it automatically during the scan:
+- Every 30 seconds with no errors: `rate += 50 req/s`
+- On any 429 or 503 response: `rate /= 2` immediately
+- Floor: 10 req/s — Ceiling: 2000 req/s
+
+### Interactive Mode
+`-interactive` pauses between each phase so you can review results and pick which targets to continue with — useful for large scopes where you want to focus on specific subdomains or hosts before crawling.
+
+### Output
+- **JSON** — structured, machine-readable, suitable for piping into other tools
+- **HTML** — dark-themed terminal-style report with collapsible sections, status-code badges, and technology tags; no external dependencies
+
+---
 
 ## Usage
 
-### Basic Scan
+### Basic scan
 ```bash
-./cyclops -d example.com
+cyclops -d example.com
 ```
 
-### Advanced Scan with Custom Settings
+### Stealth scan — passive sources only, slow and quiet
 ```bash
-./cyclops -d example.com \
-  -t 100 \
-  -r 1000 \
-  -timeout 15 \
-  -scan-timeout 30 \
-  -user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-  -format html \
-  -o report.html
+cyclops -d example.com -mode stealth -format json -o results.json
 ```
 
-### Passive-Only Mode
-Skip active DNS brute force for stealth scanning:
+### Aggressive scan — maximum speed
 ```bash
-./cyclops -d example.com -passive-only -format json -o results.json
+cyclops -d example.com -mode aggressive -format html -o report.html
 ```
 
-### With Proxy Support
+### Auto-tune the rate limiter
 ```bash
-./cyclops -d example.com -proxy http://127.0.0.1:8080
+cyclops -d example.com -autotune -v
 ```
 
-### Custom DNS Resolvers
+### Interactive mode — review and select between phases
 ```bash
-./cyclops -d example.com -resolvers "8.8.8.8,1.1.1.1,9.9.9.9"
+cyclops -d example.com -interactive
 ```
 
-### With Custom Wordlist
+### HTML report
 ```bash
-./cyclops -d example.com -w wordlists/custom.txt -t 50
+cyclops -d example.com -format html -o report.html
 ```
 
-### Verbose Output
+### Custom wordlist and resolvers
 ```bash
-./cyclops -d example.com -v
+cyclops -d example.com -w wordlists/custom.txt -resolvers "8.8.8.8,1.1.1.1,9.9.9.9"
 ```
 
-## Command Line Options
+### Through a proxy with verbose output
+```bash
+cyclops -d example.com -proxy http://127.0.0.1:8080 -v
+```
+
+---
+
+## Options
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-d` | Target domain (required) | - |
-| `-w` | Subdomain wordlist file path | Built-in wordlist |
+| `-d` | Target domain **(required)** | — |
+| `-mode` | Scan mode: `normal`, `stealth`, `aggressive` | `normal` |
 | `-t` | Concurrent workers | 50 |
 | `-r` | Max requests per second | 500 |
-| `-o` | Output file | stdout |
-| `-format` | Output format: `json`, `html` | json |
 | `-depth` | Crawl depth for endpoint discovery | 2 |
-| `-passive-only` | Only use passive sources (no DNS brute force) | false |
-| `-proxy` | HTTP proxy URL | - |
-| `-resolvers` | Comma-separated DNS resolvers (e.g. `8.8.8.8,1.1.1.1`) | 8.8.8.8:53 |
+| `-autotune` | Dynamically adjust rate based on server responses | false |
+| `-interactive` | Pause between phases to review and select targets | false |
+| `-passive-only` | Skip DNS brute force (passive sources only) | false |
+| `-w` | Subdomain wordlist file | built-in |
+| `-resolvers` | Comma-separated DNS resolvers (e.g. `8.8.8.8,1.1.1.1`) | `8.8.8.8:53` |
+| `-format` | Output format: `json`, `html` | `json` |
+| `-o` | Output file (default: stdout) | — |
+| `-proxy` | HTTP proxy URL | — |
 | `-timeout` | Per-request timeout in seconds | 10 |
 | `-scan-timeout` | Total scan timeout in minutes (0 = no limit) | 30 |
-| `-user-agent` | Custom User-Agent header | Cyclops/1.0 |
-| `-v` | Verbose output (debug logging) | false |
+| `-user-agent` | Custom User-Agent string | `Cyclops/1.0` |
+| `-v` | Verbose output | false |
 
-## Output Examples
+---
 
-### JSON Output
+## Output example
+
 ```json
 {
   "domain": "example.com",
   "scan_time": "2026-04-24T08:59:30Z",
+  "scan_mode": "normal",
   "subdomains": [
     {
       "subdomain": "www.example.com",
       "sources": ["mixed"],
-      "ip": "93.184.216.34",
       "hosts": [
         {
           "url": "https://www.example.com",
@@ -133,7 +159,7 @@ Skip active DNS brute force for stealth scanning:
           "status_code": 200,
           "title": "Example Domain",
           "server": "nginx",
-          "tech": ["nginx"],
+          "tech": ["Nginx", "WordPress"],
           "content_length": 1256,
           "endpoints": [
             {
@@ -150,59 +176,37 @@ Skip active DNS brute force for stealth scanning:
 }
 ```
 
-### HTML Output
-The HTML report provides a visual layout with:
-- Color-coded status codes (green 2xx, blue 3xx, orange 4xx, red 5xx)
-- Organized subdomain → host → endpoint hierarchy
-- Technology tags for quick identification
-- Direct links to discovered endpoints
+---
 
-## Project Structure
+## Project structure
 
 ```
 cyclops/
-├── cmd/cyclops/main.go          # CLI entrypoint with structured logging
+├── cmd/cyclops/main.go          # CLI entrypoint: flags, phases, interactive mode
 ├── internal/
-│   ├── subdomains/              # DNS enumeration and certificate lookup
-│   │   ├── dns.go               # DNS resolver with brute force, zone transfer
+│   ├── subdomains/
+│   │   ├── dns.go               # DNS resolver, brute force, zone transfer
 │   │   ├── cert.go              # Certificate transparency (crt.sh)
-│   │   └── engine.go            # Discovery engine combining all methods
-│   ├── hosts/                   # Host discovery
-│   │   ├── probe.go             # HTTP/HTTPS probing
-│   │   └── fingerprint.go       # Technology detection
-│   ├── endpoints/               # Endpoint discovery
-│   │   ├── crawler.go           # Web crawler with rate limiting
+│   │   └── engine.go            # Discovery engine combining all sources
+│   ├── hosts/
+│   │   ├── probe.go             # HTTP/HTTPS probing with stealth + autotune support
+│   │   └── fingerprint.go       # Technology detection from headers and body
+│   ├── endpoints/
+│   │   ├── crawler.go           # BFS web crawler with rate limiting
 │   │   ├── robots.go            # robots.txt and sitemap.xml parser
 │   │   └── wordlist.go          # Directory brute forcing
-│   ├── output/                  # Output formatters
+│   ├── output/
 │   │   ├── json.go              # JSON formatter
-│   │   └── html.go              # HTML report formatter
-│   └── utils/                   # Utility functions
-│       ├── pool.go              # Worker pool for concurrency
-│       └── rate.go              # Rate limiter with context support
+│   │   └── html.go              # Dark-theme HTML report
+│   └── utils/
+│       ├── pool.go              # Worker pool
+│       ├── rate.go              # Rate limiter + Autotuner
+│       └── retry.go             # Exponential backoff retry
 ├── pkg/models/types.go          # Shared data structures
-├── wordlists/default.txt        # Built-in subdomain wordlist
-├── README.md                    # This file
-├── go.mod/go.sum                # Go modules
+└── wordlists/default.txt        # Built-in subdomain wordlist
 ```
 
-## Architecture
-
-The tool follows a three-phase pipeline:
-
-1. **Subdomain Discovery**: Certificate transparency + DNS enumeration + zone transfers
-2. **Host Discovery**: Concurrent HTTP/HTTPS probing with technology fingerprinting
-3. **Endpoint Discovery**: Web crawling + robots.txt + sitemap.xml parsing
-
-All phases respect context cancellation and rate limiting for controlled scanning.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-MIT License
+---
 
 ## Author
 

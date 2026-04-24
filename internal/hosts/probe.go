@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"strings"
@@ -21,16 +22,31 @@ const bodyPreviewStoreLimit = 512   // bytes stored in model / serialized to JSO
 
 // HTTPProbe performs HTTP/HTTPS probing of hosts.
 type HTTPProbe struct {
-	client    *http.Client
-	timeout   time.Duration
-	userAgent string
+	client      *http.Client
+	timeout     time.Duration
+	userAgent   string
+	userAgents  []string // stealth mode: rotate per request
+	stealthMode bool
+	rateLimiter models.RateLimiterIface
+	reportCode  func(int)
 }
 
-// NewHTTPProbe creates a new HTTP probe.
+// NewHTTPProbe creates a new HTTP probe from raw parameters.
+// Use NewHTTPProbeFromOptions for full ScanOptions support.
 func NewHTTPProbe(timeout int, userAgent string) *HTTPProbe {
+	return NewHTTPProbeFromOptions(models.ScanOptions{
+		Timeout:   timeout,
+		UserAgent: userAgent,
+	})
+}
+
+// NewHTTPProbeFromOptions creates an HTTPProbe configured from ScanOptions.
+func NewHTTPProbeFromOptions(options models.ScanOptions) *HTTPProbe {
+	timeout := options.Timeout
 	if timeout <= 0 {
 		timeout = 10
 	}
+	userAgent := options.UserAgent
 	if userAgent == "" {
 		userAgent = "Cyclops/1.0"
 	}
@@ -62,10 +78,22 @@ func NewHTTPProbe(timeout int, userAgent string) *HTTPProbe {
 	}
 
 	return &HTTPProbe{
-		client:    client,
-		timeout:   time.Duration(timeout) * time.Second,
-		userAgent: userAgent,
+		client:      client,
+		timeout:     time.Duration(timeout) * time.Second,
+		userAgent:   userAgent,
+		userAgents:  options.UserAgents,
+		stealthMode: options.Mode == "stealth",
+		rateLimiter: options.RateLimiter,
+		reportCode:  options.ReportCode,
 	}
+}
+
+// pickUserAgent returns the UA to use for the next request.
+func (p *HTTPProbe) pickUserAgent() string {
+	if len(p.userAgents) > 0 {
+		return p.userAgents[rand.IntN(len(p.userAgents))]
+	}
+	return p.userAgent
 }
 
 // ProbeHost probes a single URL and returns host metadata.
@@ -81,11 +109,28 @@ func (p *HTTPProbe) ProbeHost(ctx context.Context, url string) (*models.Host, er
 	)
 
 	err := utils.RetryWithBackoff(ctx, 2, func() error {
+		// Rate-limit if a shared limiter is configured.
+		if p.rateLimiter != nil {
+			if err := p.rateLimiter.Wait(ctx); err != nil {
+				return err
+			}
+		}
+
+		// Stealth: random 1–4 s delay between requests.
+		if p.stealthMode {
+			delay := time.Duration(1+rand.IntN(3)) * time.Second
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			return err
 		}
-		req.Header.Set("User-Agent", p.userAgent)
+		req.Header.Set("User-Agent", p.pickUserAgent())
 		req.Header.Set("Accept", "*/*")
 
 		r, err := p.client.Do(req)
@@ -93,6 +138,10 @@ func (p *HTTPProbe) ProbeHost(ctx context.Context, url string) (*models.Host, er
 			return err
 		}
 		defer r.Body.Close()
+
+		if p.reportCode != nil {
+			p.reportCode(r.StatusCode)
+		}
 
 		b, err := io.ReadAll(io.LimitReader(r.Body, bodyPreviewLimit))
 		if err != nil {
