@@ -9,8 +9,11 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/briandowns/spinner"
@@ -36,18 +39,18 @@ func (c clearLineWriter) Write(p []byte) (int, error) {
 // ── Color helpers ────────────────────────────────────────────────────────────
 
 var (
-    logoOrange = color.RGB(244, 138, 22)       
-		logoGold   = color.RGB(245, 200, 80)   
+	logoOrange = color.RGB(244, 138, 22)
+	logoGold   = color.RGB(245, 200, 80)
 
-    logoBlue   = color.RGB(140, 195, 220) 
-    logoSteel  = color.RGB(180, 218, 235)  
+	logoBlue  = color.RGB(140, 195, 220)
+	logoSteel = color.RGB(180, 218, 235)
 
-    cyan    = color.New(color.FgCyan)
-    green   = color.New(color.FgGreen)
-    yellow  = color.New(color.FgYellow)
-    red     = color.New(color.FgRed)
-    white   = color.New(color.FgWhite)
-    dimItal = color.New(color.Faint, color.Italic)
+	cyan    = color.New(color.FgCyan)
+	green   = color.New(color.FgGreen)
+	yellow  = color.New(color.FgYellow)
+	red     = color.New(color.FgRed)
+	white   = color.New(color.FgWhite)
+	dimItal = color.New(color.Faint, color.Italic)
 )
 
 // ── Quotes ───────────────────────────────────────────────────────────────────
@@ -87,44 +90,61 @@ var stealthUserAgents = []string{
 // ── Flags ────────────────────────────────────────────────────────────────────
 
 var (
-	domain      = flag.String("d", "", "Target domain")
+	domain       = flag.String("d", "", "Target domain")
 	wordlistPath = flag.String("w", "", "Subdomain wordlist path")
-	threads     = flag.Int("t", 50, "Concurrent workers")
-	rate        = flag.Int("r", 500, "Max requests per second")
-	output      = flag.String("o", "", "Output file")
-	format      = flag.String("format", "json", "Output format: json, html")
-	depth       = flag.Int("depth", 2, "Crawl depth for endpoint discovery")
-	passiveOnly = flag.Bool("passive-only", false, "Only use passive sources (no DNS brute force)")
-	proxy       = flag.String("proxy", "", "HTTP proxy URL")
-	verbose     = flag.Bool("v", false, "Verbose output")
-	timeout     = flag.Int("timeout", 10, "Per-request timeout in seconds")
-	scanTimeout = flag.Int("scan-timeout", 30, "Total scan timeout in minutes (0 = no limit)")
-	userAgent   = flag.String("user-agent", "Cyclops/1.0", "User-Agent header")
-	resolvers   = flag.String("resolvers", "", "Comma-separated list of DNS resolvers")
-	mode        = flag.String("mode", "normal", "Scan mode: normal, stealth, aggressive")
-	autotune    = flag.Bool("autotune", false, "Dynamically adjust request rate based on server responses")
-	interactive = flag.Bool("interactive", false, "Pause between phases to review and select targets")
+	threads      = flag.Int("t", 50, "Concurrent workers")
+	rate         = flag.Int("r", 500, "Max requests per second")
+	output       = flag.String("o", "", "Output file")
+	format       = flag.String("format", "text", "Output format: text, json, html, md")
+	depth        = flag.Int("depth", 2, "Crawl depth for endpoint discovery")
+	passiveOnly  = flag.Bool("passive-only", false, "Only use passive sources (no DNS brute force)")
+	proxy        = flag.String("proxy", "", "HTTP proxy URL")
+	verbose      = flag.Bool("v", false, "Verbose output")
+	timeout      = flag.Int("timeout", 10, "Per-request timeout in seconds")
+	scanTimeout  = flag.Int("scan-timeout", 30, "Total scan timeout in minutes (0 = no limit)")
+	userAgent    = flag.String("user-agent", "Cyclops/1.0", "User-Agent header")
+	resolvers    = flag.String("resolvers", "", "Comma-separated list of DNS resolvers")
+	mode         = flag.String("mode", "normal", "Scan mode: normal, stealth, aggressive")
+	autotune     = flag.Bool("autotune", false, "Dynamically adjust request rate based on server responses")
+	interactive  = flag.Bool("interactive", false, "Pause between phases to review and select targets")
 )
+
+// ── Active spinner tracking (for Ctrl+C handler) ─────────────────────────────
+
+var (
+	spinnerMu   sync.Mutex
+	currentSpin *spinner.Spinner
+)
+
+func startSpinner(label string) *spinner.Spinner {
+	s := newSpinner(label)
+	spinnerMu.Lock()
+	currentSpin = s
+	spinnerMu.Unlock()
+	s.Start()
+	return s
+}
+
+func stopSpinner(s *spinner.Spinner) {
+	s.Stop()
+	spinnerMu.Lock()
+	if currentSpin == s {
+		currentSpin = nil
+	}
+	spinnerMu.Unlock()
+}
 
 func main() {
 	flag.Parse()
 
 	// ── ASCII Art (always shown first) ───────────────────────────────────────
-	//cyan.Println(`   ___           _                   `)
-	//cyan.Println(`  / __\  _  ___| | ___  _ __  ___  `)
-	//cyan.Println(` / /| | | | |/ __| |/ _ \| '_ \/ __| `)
-	//cyan.Println(`/ /_| |_| | | (__| | (_) | |_) \__ \ `)
-	//cyan.Println(`\____/\__, |\___|_|\___/| .__/|___/ `)
-	//cyan.Println(`      |___/             |_|          `)
-	//fmt.Println()
 	logoOrange.Println(` 	  	 ██████╗██╗   ██╗ ██████╗██╗      ██████╗ ██████╗ ███████╗	`)
 	logoOrange.Println(`		██╔════╝╚██╗ ██╔╝██╔════╝██║     ██╔═══██╗██╔══██╗██╔════╝  `)
 	logoGold.Println(`		██║      ╚████╔╝ ██║     ██║     ██║   ██║██████╔╝███████╗	`)
 	logoBlue.Println(`		██║       ╚██╔╝  ██║     ██║     ██║   ██║██╔═══╝ ╚════██║	`)
 	logoSteel.Println(`		╚██████╗   ██║   ╚██████╗███████╗╚██████╔╝██║     ███████║	`)
-  logoSteel.Println(`		 ╚═════╝   ╚═╝    ╚═════╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝	`)
+	logoSteel.Println(`		 ╚═════╝   ╚═╝    ╚═════╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝	`)
 	fmt.Println()
-
 
 	// ── Subnautica quote ──────────────────────────────────────────────────────
 	dimItal.Printf("  ~ \"%s\"\n", pickQuote(*mode))
@@ -140,6 +160,7 @@ func main() {
 		white.Println("  cyclops -d example.com -mode stealth -format html -o report.html")
 		white.Println("  cyclops -d example.com -mode aggressive -autotune -v")
 		white.Println("  cyclops -d example.com -interactive")
+		white.Println("  cyclops -d example.com -format md -o report.md")
 		fmt.Println()
 		cyan.Println("Options:")
 		flag.CommandLine.SetOutput(os.Stdout)
@@ -229,7 +250,7 @@ func main() {
 		Threads:     *threads,
 		Rate:        *rate,
 		Output:      *output,
-		Format:      *format,
+		Format:      strings.ToLower(strings.TrimSpace(*format)),
 		Depth:       *depth,
 		PassiveOnly: *passiveOnly,
 		Proxy:       *proxy,
@@ -264,17 +285,62 @@ func main() {
 		defer cancel()
 	}
 
+	// Wrap in a cancellable context for Ctrl+C handling.
+	ctx, cancelScan := context.WithCancel(ctx)
+	defer cancelScan()
+
 	// Start autotune background loop.
 	if autotuner != nil {
 		go autotuner.Run(ctx)
 		defer autotuner.Stop()
 	}
 
+	// ── Ctrl+C handler ────────────────────────────────────────────────────────
+	var (
+		interrupted atomic.Bool
+		wantSave    atomic.Bool
+	)
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+
+	go func() {
+		for range sigChan {
+			// Stop active spinner before printing.
+			spinnerMu.Lock()
+			sp := currentSpin
+			spinnerMu.Unlock()
+			if sp != nil {
+				sp.Stop()
+			}
+			fmt.Fprint(os.Stderr, "\r\033[K")
+
+			yellow.Fprintln(os.Stderr, "[!] Interrupt received.")
+			ans := readLine("Cancel scan? [y/N]: ")
+			if !isYes(ans) {
+				// User wants to continue — restart spinner if still active.
+				spinnerMu.Lock()
+				sp2 := currentSpin
+				spinnerMu.Unlock()
+				if sp2 != nil && sp2 == sp {
+					sp2.Start()
+				}
+				continue
+			}
+
+			saveAns := readLine("Save partial results found so far? [Y/n]: ")
+			wantSave.Store(saveAns == "" || isYes(saveAns))
+
+			interrupted.Store(true)
+			cancelScan()
+			return
+		}
+	}()
+
 	// ── Phase 1: Subdomain enumeration ────────────────────────────────────────
-	s := newSpinner("Enumerating subdomains...")
-	s.Start()
+	s := startSpinner("Enumerating subdomains...")
 	subdomainsFound, err := runSubdomainEnumeration(ctx, options)
-	s.Stop()
+	stopSpinner(s)
 
 	if err != nil {
 		red.Fprintf(os.Stderr, "[!] Subdomain enumeration error: %v\n", err)
@@ -292,17 +358,16 @@ func main() {
 	// Interactive: choose which subdomains to continue with.
 	if *interactive && len(result.Subdomains) > 0 {
 		if !promptContinue("host discovery") {
-			outputResults(result, options)
+			handleOutput(result, options, interrupted.Load(), wantSave.Load())
 			return
 		}
 		result.Subdomains = interactiveSelectSubdomains(result.Subdomains)
 	}
 
 	// ── Phase 2: Host discovery ───────────────────────────────────────────────
-	s = newSpinner("Probing hosts...")
-	s.Start()
+	s = startSpinner("Probing hosts...")
 	hostsFound, err := runHostDiscovery(ctx, options, result.Subdomains)
-	s.Stop()
+	stopSpinner(s)
 
 	if err != nil {
 		red.Fprintf(os.Stderr, "[!] Host discovery error: %v\n", err)
@@ -328,17 +393,16 @@ func main() {
 	// Interactive: choose which hosts to crawl.
 	if *interactive && len(hostsFound) > 0 {
 		if !promptContinue("endpoint crawling") {
-			outputResults(result, options)
+			handleOutput(result, options, interrupted.Load(), wantSave.Load())
 			return
 		}
 		hostsFound = interactiveSelectHosts(hostsFound)
 	}
 
 	// ── Phase 3: Endpoint discovery ───────────────────────────────────────────
-	s = newSpinner("Crawling endpoints...")
-	s.Start()
+	s = startSpinner("Crawling endpoints...")
 	endpointsFound, err := runEndpointDiscovery(ctx, options, hostsFound, s)
-	s.Stop()
+	stopSpinner(s)
 
 	if err != nil {
 		red.Fprintf(os.Stderr, "[!] Endpoint discovery error: %v\n", err)
@@ -358,13 +422,32 @@ func main() {
 	}
 
 	// ── Output ────────────────────────────────────────────────────────────────
-	cyan.Println("[*] Generating output...")
+	handleOutput(result, options, interrupted.Load(), wantSave.Load())
+}
+
+// handleOutput writes results or exits cleanly on cancel-without-save.
+func handleOutput(result models.Result, options models.ScanOptions, interrupted, wantSave bool) {
+	if interrupted && !wantSave {
+		yellow.Println("[!] Scan cancelled. No results saved.")
+		os.Exit(0)
+	}
+
+	if interrupted {
+		cyan.Println("[*] Saving partial results...")
+	} else {
+		cyan.Println("[*] Generating output...")
+	}
+
 	if err := outputResults(result, options); err != nil {
 		red.Fprintf(os.Stderr, "Error generating output: %v\n", err)
 		os.Exit(1)
 	}
 
-	green.Println("[*] Scan complete.")
+	if interrupted {
+		green.Println("[*] Partial results saved.")
+	} else {
+		green.Println("[*] Scan complete.")
+	}
 }
 
 // ── Spinner helper ────────────────────────────────────────────────────────────
@@ -418,7 +501,11 @@ func runEndpointDiscovery(ctx context.Context, options models.ScanOptions, liveH
 	var allEndpoints []models.Endpoint
 
 	for _, host := range liveHosts {
-		s.Suffix = fmt.Sprintf("  Crawling endpoints... (%s)", host.URL)
+		spinnerMu.Lock()
+		if currentSpin == s {
+			s.Suffix = fmt.Sprintf("  Crawling endpoints... (%s)", host.URL)
+		}
+		spinnerMu.Unlock()
 
 		crawler := endpoints.NewCrawler(options)
 		robotsParser := endpoints.NewRobotsParser(options)
@@ -437,25 +524,34 @@ func runEndpointDiscovery(ctx context.Context, options models.ScanOptions, liveH
 // ── Output ────────────────────────────────────────────────────────────────────
 
 func outputResults(result models.Result, options models.ScanOptions) error {
-	var formatter interface {
+	type formatter interface {
 		WriteToFile(models.Result, string) error
 		WriteToStdout(models.Result) error
 	}
 
+	var f formatter
 	switch options.Format {
 	case "html":
-		formatter = outputfmt.NewHTMLFormatter()
+		f = outputfmt.NewHTMLFormatter()
+	case "json":
+		f = outputfmt.NewJSONFormatter()
+	case "md", "markdown":
+		f = outputfmt.NewMarkdownFormatter()
+	case "text", "txt", "":
+		f = outputfmt.NewTextFormatter()
 	default:
-		formatter = outputfmt.NewJSONFormatter()
+		yellow.Fprintf(os.Stderr, "[!] Unknown format %q — falling back to text\n", options.Format)
+		f = outputfmt.NewTextFormatter()
 	}
 
 	if options.Output != "" {
-		if err := formatter.WriteToFile(result, options.Output); err != nil {
+		if err := f.WriteToFile(result, options.Output); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
-		white.Printf("[*] Results written to %s\n", options.Output)
+		absPath, _ := os.Getwd()
+		white.Printf("[*] Results written to %s/%s\n", absPath, options.Output)
 	} else {
-		if err := formatter.WriteToStdout(result); err != nil {
+		if err := f.WriteToStdout(result); err != nil {
 			return fmt.Errorf("failed to write output to stdout: %w", err)
 		}
 	}
@@ -471,6 +567,11 @@ func readLine(prompt string) string {
 	fmt.Print(prompt)
 	line, _ := stdinReader.ReadString('\n')
 	return strings.TrimSpace(line)
+}
+
+func isYes(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return s == "y" || s == "yes"
 }
 
 // promptContinue asks "Continue to [phase]? [Y/n]:" and returns true to continue.
