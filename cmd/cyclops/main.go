@@ -36,12 +36,21 @@ func (c clearLineWriter) Write(p []byte) (int, error) {
 // ── Color helpers ────────────────────────────────────────────────────────────
 
 var (
-	cyan    = color.New(color.FgCyan)
-	green   = color.New(color.FgGreen)
-	yellow  = color.New(color.FgYellow)
-	red     = color.New(color.FgRed)
-	white   = color.New(color.FgWhite)
-	dimItal = color.New(color.Faint, color.Italic)
+    // "SUB" — warm amber to gold gradient, top to bottom
+    logoOrange = color.RGB(244, 138, 22)   // deep amber, dominant in SUB
+    logoGold   = color.RGB(245, 200, 80)   // lighter gold highlight
+
+    // "NAUTICA" — steel blue, slightly desaturated
+    logoBlue   = color.RGB(140, 195, 220)  // main body of NAUTICA letters
+    logoSteel  = color.RGB(180, 218, 235)  // highlight/shine on NAUTICA
+
+    // keep your utility colors
+    cyan    = color.New(color.FgCyan)
+    green   = color.New(color.FgGreen)
+    yellow  = color.New(color.FgYellow)
+    red     = color.New(color.FgRed)
+    white   = color.New(color.FgWhite)
+    dimItal = color.New(color.Faint, color.Italic)
 )
 
 // ── Quotes ───────────────────────────────────────────────────────────────────
@@ -104,13 +113,21 @@ func main() {
 	flag.Parse()
 
 	// ── ASCII Art (always shown first) ───────────────────────────────────────
-	cyan.Println(`   ___           _                   `)
-	cyan.Println(`  / __\   _  ___| | ___  _ __  ___  `)
-	cyan.Println(` / /| | | | |/ __| |/ _ \| '_ \/ __| `)
-	cyan.Println(`/ /_| |_| | | (__| | (_) | |_) \__ \ `)
-	cyan.Println(`\____/\__, |\___|_|\___/| .__/|___/ `)
-	cyan.Println(`      |___/             |_|          `)
+	//cyan.Println(`   ___           _                   `)
+	//cyan.Println(`  / __\  _  ___| | ___  _ __  ___  `)
+	//cyan.Println(` / /| | | | |/ __| |/ _ \| '_ \/ __| `)
+	//cyan.Println(`/ /_| |_| | | (__| | (_) | |_) \__ \ `)
+	//cyan.Println(`\____/\__, |\___|_|\___/| .__/|___/ `)
+	//cyan.Println(`      |___/             |_|          `)
+	//fmt.Println()
+	logoOrange.Println(` 	  	 ██████╗██╗   ██╗ ██████╗██╗      ██████╗ ██████╗ ███████╗	`)
+	logoOrange.Println(`		██╔════╝╚██╗ ██╔╝██╔════╝██║     ██╔═══██╗██╔══██╗██╔════╝  `)
+	logoGold.Println(`		██║      ╚████╔╝ ██║     ██║     ██║   ██║██████╔╝███████╗	`)
+	logoBlue.Println(`		██║       ╚██╔╝  ██║     ██║     ██║   ██║██╔═══╝ ╚════██║	`)
+	logoSteel.Println(`		╚██████╗   ██║   ╚██████╗███████╗╚██████╔╝██║     ███████║	`)
+  logoSteel.Println(`		 ╚═════╝   ╚═╝    ╚═════╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝	`)
 	fmt.Println()
+
 
 	// ── Subnautica quote ──────────────────────────────────────────────────────
 	dimItal.Printf("  ~ \"%s\"\n", pickQuote(*mode))
