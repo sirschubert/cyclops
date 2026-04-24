@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"os"
@@ -21,6 +22,16 @@ import (
 	"github.com/sirschubert/cyclops/internal/utils"
 	"github.com/sirschubert/cyclops/pkg/models"
 )
+
+// clearLineWriter prepends the ANSI "move to start of line + erase" sequence
+// before every write so that slog output doesn't collide with the spinner.
+type clearLineWriter struct{ w io.Writer }
+
+func (c clearLineWriter) Write(p []byte) (int, error) {
+	_, _ = c.w.Write([]byte("\r\033[K"))
+	_, err := c.w.Write(p)
+	return len(p), err
+}
 
 // ── Color helpers ────────────────────────────────────────────────────────────
 
@@ -92,11 +103,41 @@ var (
 func main() {
 	flag.Parse()
 
-	// Track which flags were set explicitly so mode defaults don't override them.
+	// ── ASCII Art (always shown first) ───────────────────────────────────────
+	cyan.Println(`   ___           _                   `)
+	cyan.Println(`  / __\   _  ___| | ___  _ __  ___  `)
+	cyan.Println(` / /| | | | |/ __| |/ _ \| '_ \/ __| `)
+	cyan.Println(`/ /_| |_| | | (__| | (_) | |_) \__ \ `)
+	cyan.Println(`\____/\__, |\___|_|\___/| .__/|___/ `)
+	cyan.Println(`      |___/             |_|          `)
+	fmt.Println()
+
+	// ── Subnautica quote ──────────────────────────────────────────────────────
+	dimItal.Printf("  ~ \"%s\"\n", pickQuote(*mode))
+	fmt.Println()
+
+	// ── No-args: print usage and exit cleanly ─────────────────────────────────
+	if *domain == "" {
+		cyan.Println("Usage:")
+		white.Println("  cyclops -d <domain> [options]")
+		fmt.Println()
+		cyan.Println("Examples:")
+		white.Println("  cyclops -d example.com")
+		white.Println("  cyclops -d example.com -mode stealth -format html -o report.html")
+		white.Println("  cyclops -d example.com -mode aggressive -autotune -v")
+		white.Println("  cyclops -d example.com -interactive")
+		fmt.Println()
+		cyan.Println("Options:")
+		flag.CommandLine.SetOutput(os.Stdout)
+		flag.PrintDefaults()
+		os.Exit(0)
+	}
+
+	// ── Track which flags were set explicitly so mode defaults don't override ─
 	explicit := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 
-	// ── Apply mode defaults (explicit flags take priority) ──────────────────
+	// ── Apply mode defaults (explicit flags take priority) ────────────────────
 	switch *mode {
 	case "stealth":
 		if !explicit["t"] {
@@ -120,31 +161,15 @@ func main() {
 		}
 	}
 
-	if *domain == "" {
-		fmt.Fprintln(os.Stderr, "Error: target domain is required (-d example.com)")
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	// ── Logging ──────────────────────────────────────────────────────────────
+	// ── Logging ───────────────────────────────────────────────────────────────
 	logLevel := slog.LevelWarn
 	if *verbose {
 		logLevel = slog.LevelDebug
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
-
-	// ── ASCII Art ─────────────────────────────────────────────────────────────
-	cyan.Println(`   ___           _                   `)
-	cyan.Println(`  / __\   _  ___| | ___  _ __  ___  `)
-	cyan.Println(` / /| | | | |/ __| |/ _ \| '_ \/ __| `)
-	cyan.Println(`/ /_| |_| | | (__| | (_) | |_) \__ \ `)
-	cyan.Println(`\____/\__, |\___|_|\___/| .__/|___/ `)
-	cyan.Println(`      |___/             |_|          `)
-	fmt.Println()
-
-	// ── Subnautica quote ──────────────────────────────────────────────────────
-	dimItal.Printf("  ~ \"%s\"\n", pickQuote(*mode))
-	fmt.Println()
+	slog.SetDefault(slog.New(slog.NewTextHandler(
+		clearLineWriter{os.Stderr},
+		&slog.HandlerOptions{Level: logLevel},
+	)))
 
 	// ── Parse resolvers ───────────────────────────────────────────────────────
 	var resolverList []string

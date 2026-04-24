@@ -91,7 +91,7 @@ func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]strin
 	}
 
 	for err := range errors {
-		slog.Warn("subdomain discovery partial failure", "err", err)
+		slog.Debug("subdomain discovery partial failure", "err", err)
 	}
 
 	seen := make(map[string]bool, len(allSubdomains))
