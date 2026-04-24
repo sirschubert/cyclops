@@ -17,22 +17,28 @@ type DiscoveryEngine struct {
 
 // NewDiscoveryEngine creates a new subdomain discovery engine.
 func NewDiscoveryEngine(options models.ScanOptions) *DiscoveryEngine {
+	nameserver := ""
+	if len(options.Resolvers) > 0 {
+		nameserver = options.Resolvers[0]
+	}
 	return &DiscoveryEngine{
-		dnsResolver: NewDNSResolver(""),
+		dnsResolver: NewDNSResolver(nameserver),
 		options:     options,
 	}
 }
 
 // Discover performs comprehensive subdomain discovery using all configured sources.
 func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]string, error) {
-	var allSubdomains []string
-	var mu sync.Mutex
+	type sourceResult struct {
+		subdomains []string
+		source     string
+	}
 
-	results := make(chan []string, 3)
+	results := make(chan sourceResult, 3)
 	errors := make(chan error, 3)
 
-	// DNS Enumeration
 	wg := &sync.WaitGroup{}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -41,10 +47,9 @@ func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]strin
 			errors <- fmt.Errorf("DNS enumeration failed: %v", err)
 			return
 		}
-		results <- subs
+		results <- sourceResult{subdomains: subs, source: "dns"}
 	}()
 
-	// Certificate Transparency
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -53,10 +58,9 @@ func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]strin
 			errors <- fmt.Errorf("certificate transparency failed: %v", err)
 			return
 		}
-		results <- subs
+		results <- sourceResult{subdomains: subs, source: "cert"}
 	}()
 
-	// Brute Force (only if wordlist provided and not passive mode)
 	if !de.options.PassiveOnly && de.options.Wordlist != "" {
 		wg.Add(1)
 		go func() {
@@ -66,7 +70,7 @@ func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]strin
 				errors <- fmt.Errorf("brute force failed: %v", err)
 				return
 			}
-			results <- subs
+			results <- sourceResult{subdomains: subs, source: "bruteforce"}
 		}()
 	}
 
@@ -76,18 +80,20 @@ func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]strin
 		close(errors)
 	}()
 
-	for subs := range results {
+	var allSubdomains []string
+	var mu sync.Mutex
+
+	for sr := range results {
+		slog.Debug("subdomain source results", "source", sr.source, "count", len(sr.subdomains))
 		mu.Lock()
-		allSubdomains = append(allSubdomains, subs...)
+		allSubdomains = append(allSubdomains, sr.subdomains...)
 		mu.Unlock()
 	}
 
-	// Drain any errors and log them as warnings.
 	for err := range errors {
 		slog.Warn("subdomain discovery partial failure", "err", err)
 	}
 
-	// Deduplicate
 	seen := make(map[string]bool, len(allSubdomains))
 	unique := make([]string, 0, len(allSubdomains))
 	for _, s := range allSubdomains {

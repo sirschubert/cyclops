@@ -1,6 +1,6 @@
 module github.com/sirschubert/cyclops
 
-go 1.26.2
+go 1.25.0
 
 require (
 	github.com/miekg/dns v1.1.72

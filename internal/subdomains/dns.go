@@ -258,3 +258,79 @@ func (d *DNSResolver) Enumerate(ctx context.Context, domain string, options mode
 
 	return allSubdomains, nil
 }
+
+// MultiResolver performs DNS brute-force using multiple nameservers in round-robin.
+type MultiResolver struct {
+	resolvers []*DNSResolver
+}
+
+// NewMultiResolver creates a MultiResolver from a list of nameserver addresses.
+// Each address should be in "ip:port" format (port defaults to 53 if absent).
+// Falls back to a single 8.8.8.8:53 resolver if the list is empty.
+func NewMultiResolver(nameservers []string) *MultiResolver {
+	if len(nameservers) == 0 {
+		nameservers = []string{"8.8.8.8:53"}
+	}
+	resolvers := make([]*DNSResolver, 0, len(nameservers))
+	for _, ns := range nameservers {
+		if !strings.Contains(ns, ":") {
+			ns += ":53"
+		}
+		resolvers = append(resolvers, NewDNSResolver(ns))
+	}
+	return &MultiResolver{resolvers: resolvers}
+}
+
+// BruteForce performs DNS brute-force enumeration distributing work across all resolvers.
+// Workers are assigned resolvers in round-robin order so the load is spread evenly.
+func (m *MultiResolver) BruteForce(ctx context.Context, domain, wordlist string, workers int) ([]string, error) {
+	words := strings.Split(wordlist, "\n")
+	var subdomains []string
+	var mu sync.Mutex
+
+	pool := &sync.WaitGroup{}
+	jobs := make(chan string, workers)
+
+	for i := 0; i < workers; i++ {
+		resolver := m.resolvers[i%len(m.resolvers)] // round-robin
+		pool.Add(1)
+		go func(r *DNSResolver) {
+			defer pool.Done()
+			for word := range jobs {
+				if word == "" {
+					continue
+				}
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				subdomain := fmt.Sprintf("%s.%s", strings.TrimSpace(word), domain)
+				ips, err := r.resolver.LookupIPAddr(ctx, subdomain)
+				if err == nil && len(ips) > 0 {
+					mu.Lock()
+					subdomains = append(subdomains, subdomain)
+					mu.Unlock()
+				}
+			}
+		}(resolver)
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, word := range words {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- word:
+			}
+		}
+	}()
+
+	pool.Wait()
+
+	if err := ctx.Err(); err != nil {
+		return subdomains, err
+	}
+	return subdomains, nil
+}

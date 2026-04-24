@@ -164,60 +164,25 @@ func main() {
 }
 
 func runSubdomainEnumeration(ctx context.Context, options models.ScanOptions) ([]models.Subdomain, error) {
-	var allSubdomains []string
-
 	fmt.Println("  [*] Performing subdomain discovery...")
-
-	// Certificate transparency lookup
-	fmt.Println("    [*] Checking certificate transparency logs...")
-	certSubdomains, err := subdomains.CertTransparency(ctx, options.Domain)
+	// Fall back to built-in wordlist when no custom wordlist is specified.
+	if options.Wordlist == "" && !options.PassiveOnly {
+		options.Wordlist = strings.Join(getDefaultWordlist(), "\n")
+	}
+	engine := subdomains.NewDiscoveryEngine(options)
+	names, err := engine.Discover(ctx, options.Domain)
 	if err != nil {
-		slog.Warn("certificate transparency lookup failed", "err", err)
-	} else {
-		fmt.Printf("    [+] Found %d subdomains from certificates\n", len(certSubdomains))
-		allSubdomains = append(allSubdomains, certSubdomains...)
+		return nil, err
 	}
-
-	// DNS brute force (if not passive-only)
-	if !options.PassiveOnly {
-		fmt.Println("    [*] Performing DNS brute force...")
-
-		// Pick the first custom resolver if provided, else default.
-		nameserver := "8.8.8.8:53"
-		if len(options.Resolvers) > 0 {
-			nameserver = options.Resolvers[0]
-		}
-		dnsResolver := subdomains.NewDNSResolver(nameserver)
-
-		// Use the provided wordlist, or fall back to the built-in default.
-		wordlistStr := options.Wordlist
-		if wordlistStr == "" {
-			wordlistStr = strings.Join(getDefaultWordlist(), "\n")
-		}
-
-		dnsSubdomains, err := dnsResolver.BruteForce(ctx, options.Domain, wordlistStr, options.Threads)
-		if err != nil {
-			slog.Warn("DNS brute force failed", "err", err)
-		} else {
-			fmt.Printf("    [+] Found %d subdomains from DNS brute force\n", len(dnsSubdomains))
-			allSubdomains = append(allSubdomains, dnsSubdomains...)
-		}
+	result := make([]models.Subdomain, 0, len(names))
+	for _, name := range names {
+		result = append(result, models.Subdomain{
+			Name:    name,
+			Sources: []string{"mixed"},
+		})
 	}
-
-	// Deduplicate
-	seen := make(map[string]bool, len(allSubdomains))
-	var subdomainObjects []models.Subdomain
-	for _, sub := range allSubdomains {
-		if !seen[sub] {
-			seen[sub] = true
-			subdomainObjects = append(subdomainObjects, models.Subdomain{
-				Name:    sub,
-				Sources: []string{"mixed"},
-			})
-		}
-	}
-
-	return subdomainObjects, nil
+	fmt.Printf("    [+] Found %d unique subdomains\n", len(result))
+	return result, nil
 }
 
 func runHostDiscovery(ctx context.Context, options models.ScanOptions, subds []models.Subdomain) ([]models.Host, error) {

@@ -12,6 +12,20 @@ import (
 	"github.com/sirschubert/cyclops/internal/utils"
 )
 
+// DefaultDirectoryWordlist returns a list of common web directory/file names
+func DefaultDirectoryWordlist() []string {
+	return []string{
+		"admin", "api", "app", "backup", "config", "dashboard", "data",
+		"debug", "dev", "docs", "download", "error", "files", "health",
+		"help", "hidden", "home", "images", "include", "index", "info",
+		"js", "login", "logout", "media", "metrics", "monitor", "old",
+		"panel", "php", "private", "public", "readme", "robots", "search",
+		"secret", "server-status", "setup", "sitemap", "static", "status",
+		"swagger", "test", "tmp", "upload", "user", "users", "vendor",
+		"wp-admin", "wp-login", "xmlrpc",
+	}
+}
+
 // WordlistBruteforcer performs wordlist-based directory bruteforcing
 type WordlistBruteforcer struct {
 	client      *http.Client
@@ -44,7 +58,7 @@ func NewWordlistBruteforcer(options models.ScanOptions, wordlist []string) *Word
 	}
 
 	// Common extensions to try
-	extensions := []string{"", ".html", ".php", ".asp", ".aspx", ".jsp", ".cgi", ".bak", ".old", ".txt", ".zip", ".tar.gz"}
+	extensions := []string{"", ".html", ".php", ".asp", ".aspx", ".jsp", ".cgi", ".bak", ".old", ".txt", ".zip", ".tar.gz", ".json", ".xml"}
 
 	return &WordlistBruteforcer{
 		client:      client,
@@ -141,7 +155,7 @@ func (w *WordlistBruteforcer) testPath(ctx context.Context, baseURL *url.URL, pa
 	}
 	defer resp.Body.Close()
 
-	// Only consider interesting status codes (not 404)
+	// Consider all non-404 responses as potentially interesting endpoints.
 	if resp.StatusCode != 404 {
 		endpoint := models.Endpoint{
 			URL:        fullURL,

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirschubert/cyclops/internal/utils"
 	"github.com/sirschubert/cyclops/pkg/models"
 	"golang.org/x/net/html"
 )
@@ -22,6 +23,7 @@ type Crawler struct {
 	userAgent   string
 	timeout     time.Duration
 	concurrency int
+	rateLimiter *utils.RateLimiter
 }
 
 // NewCrawler creates a new web crawler
@@ -52,6 +54,7 @@ func NewCrawler(options models.ScanOptions) *Crawler {
 		userAgent:   options.UserAgent,
 		timeout:     time.Duration(options.Timeout) * time.Second,
 		concurrency: options.Threads,
+		rateLimiter: utils.NewRateLimiter(options.Rate),
 	}
 }
 
@@ -138,6 +141,12 @@ type urlVisit struct {
 
 // fetchAndParse fetches a URL and extracts endpoints and links
 func (c *Crawler) fetchAndParse(ctx context.Context, u *url.URL) ([]models.Endpoint, []string, error) {
+	if c.rateLimiter != nil {
+		if err := c.rateLimiter.Wait(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
 		return nil, nil, err

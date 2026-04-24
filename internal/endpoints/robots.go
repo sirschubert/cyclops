@@ -1,23 +1,27 @@
 package endpoints
 
 import (
+	"bufio"
 	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/sirschubert/cyclops/pkg/models"
 )
 
-// RobotsParser parses robots.txt and sitemap.xml files to discover endpoints
+// RobotsParser parses robots.txt and sitemap.xml files to discover endpoints.
 type RobotsParser struct {
 	client    *http.Client
 	userAgent string
 	timeout   time.Duration
 }
 
-// NewRobotsParser creates a new robots.txt parser
+// NewRobotsParser creates a new robots.txt parser.
 func NewRobotsParser(options models.ScanOptions) *RobotsParser {
 	transport := &http.Transport{
 		MaxIdleConns:        100,
@@ -44,7 +48,7 @@ func NewRobotsParser(options models.ScanOptions) *RobotsParser {
 	}
 }
 
-// ParseRobots fetches and parses robots.txt to discover disallowed paths
+// ParseRobots fetches and parses robots.txt, returning each Disallow path as an endpoint.
 func (r *RobotsParser) ParseRobots(ctx context.Context, baseURL string) ([]models.Endpoint, error) {
 	parsedBase, err := url.Parse(baseURL)
 	if err != nil {
@@ -56,7 +60,6 @@ func (r *RobotsParser) ParseRobots(ctx context.Context, baseURL string) ([]model
 	if err != nil {
 		return nil, err
 	}
-
 	if r.userAgent != "" {
 		req.Header.Set("User-Agent", r.userAgent)
 	}
@@ -71,31 +74,99 @@ func (r *RobotsParser) ParseRobots(ctx context.Context, baseURL string) ([]model
 		return nil, fmt.Errorf("robots.txt returned status %d", resp.StatusCode)
 	}
 
-	// For now, we'll just create a placeholder endpoint for robots.txt
-	// In a full implementation, we would parse the file and extract disallowed paths
-	endpoint := models.Endpoint{
+	var endpoints []models.Endpoint
+
+	// robots.txt itself is an endpoint.
+	endpoints = append(endpoints, models.Endpoint{
 		URL:        robotsURL,
 		Method:     "GET",
 		StatusCode: resp.StatusCode,
 		Source:     "robots",
+	})
+
+	// Parse each line for Disallow and Sitemap directives.
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		var directive, value string
+		if idx := strings.Index(line, ":"); idx != -1 {
+			directive = strings.TrimSpace(line[:idx])
+			value = strings.TrimSpace(line[idx+1:])
+		}
+
+		switch strings.ToLower(directive) {
+		case "disallow":
+			if value != "" && value != "/" {
+				fullURL := fmt.Sprintf("%s://%s%s", parsedBase.Scheme, parsedBase.Host, value)
+				endpoints = append(endpoints, models.Endpoint{
+					URL:    fullURL,
+					Method: "GET",
+					Source: "robots",
+				})
+			}
+		case "allow":
+			if value != "" && value != "/" {
+				fullURL := fmt.Sprintf("%s://%s%s", parsedBase.Scheme, parsedBase.Host, value)
+				endpoints = append(endpoints, models.Endpoint{
+					URL:    fullURL,
+					Method: "GET",
+					Source: "robots",
+				})
+			}
+		case "sitemap":
+			if value != "" {
+				// Recursively parse linked sitemaps.
+				sitemapEndpoints, err := r.parseSitemapURL(ctx, value)
+				if err == nil {
+					endpoints = append(endpoints, sitemapEndpoints...)
+				}
+			}
+		}
 	}
 
-	return []models.Endpoint{endpoint}, nil
+	return endpoints, nil
 }
 
-// ParseSitemap fetches and parses sitemap.xml to discover URLs
+// sitemapURLSet is the XML structure for a sitemap.
+type sitemapURLSet struct {
+	XMLName xml.Name      `xml:"urlset"`
+	URLs    []sitemapURL  `xml:"url"`
+}
+
+type sitemapURL struct {
+	Loc string `xml:"loc"`
+}
+
+// sitemapIndex is the XML structure for a sitemap index.
+type sitemapIndex struct {
+	XMLName  xml.Name         `xml:"sitemapindex"`
+	Sitemaps []sitemapEntry   `xml:"sitemap"`
+}
+
+type sitemapEntry struct {
+	Loc string `xml:"loc"`
+}
+
+// ParseSitemap fetches and parses sitemap.xml, returning each URL as an endpoint.
 func (r *RobotsParser) ParseSitemap(ctx context.Context, baseURL string) ([]models.Endpoint, error) {
 	parsedBase, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base URL: %w", err)
 	}
-
 	sitemapURL := fmt.Sprintf("%s://%s/sitemap.xml", parsedBase.Scheme, parsedBase.Host)
+	return r.parseSitemapURL(ctx, sitemapURL)
+}
+
+// parseSitemapURL fetches and parses a sitemap at an arbitrary URL.
+func (r *RobotsParser) parseSitemapURL(ctx context.Context, sitemapURL string) ([]models.Endpoint, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", sitemapURL, nil)
 	if err != nil {
 		return nil, err
 	}
-
 	if r.userAgent != "" {
 		req.Header.Set("User-Agent", r.userAgent)
 	}
@@ -107,34 +178,66 @@ func (r *RobotsParser) ParseSitemap(ctx context.Context, baseURL string) ([]mode
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("sitemap.xml returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("sitemap returned status %d", resp.StatusCode)
 	}
 
-	// For now, we'll just create a placeholder endpoint for sitemap.xml
-	// In a full implementation, we would parse the XML and extract URLs
-	endpoint := models.Endpoint{
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var endpoints []models.Endpoint
+
+	// Record the sitemap file itself.
+	endpoints = append(endpoints, models.Endpoint{
 		URL:        sitemapURL,
 		Method:     "GET",
 		StatusCode: resp.StatusCode,
 		Source:     "sitemap",
+	})
+
+	// Try parsing as a sitemap index first.
+	var index sitemapIndex
+	if err := xml.Unmarshal(body, &index); err == nil && len(index.Sitemaps) > 0 {
+		for _, entry := range index.Sitemaps {
+			if entry.Loc != "" {
+				childEndpoints, err := r.parseSitemapURL(ctx, entry.Loc)
+				if err == nil {
+					endpoints = append(endpoints, childEndpoints...)
+				}
+			}
+		}
+		return endpoints, nil
 	}
 
-	return []models.Endpoint{endpoint}, nil
+	// Fall back to parsing as a regular urlset.
+	var urlset sitemapURLSet
+	if err := xml.Unmarshal(body, &urlset); err != nil {
+		return endpoints, nil // return at least the sitemap URL itself
+	}
+
+	for _, u := range urlset.URLs {
+		if u.Loc != "" {
+			endpoints = append(endpoints, models.Endpoint{
+				URL:    u.Loc,
+				Method: "GET",
+				Source: "sitemap",
+			})
+		}
+	}
+
+	return endpoints, nil
 }
 
-// ParseAll parses both robots.txt and sitemap.xml
+// ParseAll parses both robots.txt and sitemap.xml.
 func (r *RobotsParser) ParseAll(ctx context.Context, baseURL string) ([]models.Endpoint, error) {
 	var allEndpoints []models.Endpoint
 
-	// Parse robots.txt
-	robotsEndpoints, err := r.ParseRobots(ctx, baseURL)
-	if err == nil {
+	if robotsEndpoints, err := r.ParseRobots(ctx, baseURL); err == nil {
 		allEndpoints = append(allEndpoints, robotsEndpoints...)
 	}
 
-	// Parse sitemap.xml
-	sitemapEndpoints, err := r.ParseSitemap(ctx, baseURL)
-	if err == nil {
+	if sitemapEndpoints, err := r.ParseSitemap(ctx, baseURL); err == nil {
 		allEndpoints = append(allEndpoints, sitemapEndpoints...)
 	}
 
