@@ -32,3 +32,7 @@ cyclops
 # OS files
 .DS_Store
 Thumbs.db
+
+# OpenClaude files
+.openclaude-profile.json
+.openclaude/
