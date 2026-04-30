@@ -344,10 +344,19 @@ func main() {
 
 	if err != nil {
 		red.Fprintf(os.Stderr, "[!] Subdomain enumeration error: %v\n", err)
-	} else {
-		result.Subdomains = subdomainsFound
-		green.Printf("[+] Found %d subdomains\n", len(subdomainsFound))
+		return // Exit on error
+	} 
+
+	// If zero, print the warning and exit immediately
+	if len(subdomainsFound) == 0 {
+		red.Println("[!] No subdomains found.")
+		yellow.Println("[-] Make sure the domain is correct and try with less threads and different mode")
+		return 
 	}
+
+	// Only prints if we actually have results
+	result.Subdomains = subdomainsFound
+	green.Printf("[+] Found %d subdomains\n", len(subdomainsFound))
 
 	if *verbose {
 		for _, sub := range result.Subdomains {
