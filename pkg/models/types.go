@@ -78,4 +78,21 @@ type ScanOptions struct {
 
 	// Callback to report response status codes (used by autotune)
 	ReportCode func(int)
+
+	// Directory bruteforcing
+	Extend          bool   // enable directory bruteforcing after crawl
+	DirWordlistPath string // custom directory wordlist path
+
+	// TLS
+	InsecureSkipVerify bool // disable TLS certificate verification
+
+	// Output
+	NoColor bool // disable colored output
+
+	// Checkpoint / resume
+	CheckpointDir string // directory for checkpoint files
+	ResumeFrom    string // resume from checkpoint file
+
+	// Cloud metadata redirect blocking
+	BlockMetadata bool // block redirects to metadata endpoints (169.254.0.0/16)
 }

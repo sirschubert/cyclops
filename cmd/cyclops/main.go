@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,6 +108,12 @@ var (
 	mode         = flag.String("mode", "normal", "Scan mode: normal, stealth, aggressive")
 	autotune     = flag.Bool("autotune", false, "Dynamically adjust request rate based on server responses")
 	interactive  = flag.Bool("interactive", false, "Pause between phases to review and select targets")
+	extend        = flag.Bool("extend", false, "Enable directory bruteforcing after crawl")
+	wordlistDir   = flag.String("wordlist-dir", "", "Custom directory wordlist path")
+	insecure      = flag.Bool("insecure", false, "Disable TLS certificate verification")
+	noColor       = flag.Bool("no-color", false, "Disable colored output")
+	checkpointDir = flag.String("checkpoint-dir", "", "Directory for checkpoint files")
+	resumeFrom    = flag.String("resume", "", "Resume scan from checkpoint file")
 )
 
 // ── Active spinner tracking (for Ctrl+C handler) ─────────────────────────────
@@ -136,6 +143,16 @@ func stopSpinner(s *spinner.Spinner) {
 
 func main() {
 	flag.Parse()
+
+	// ── No-color ───────────────────────────────────────────────────────────
+	color.NoColor = *noColor
+
+	// ── Domain validation ──────────────────────────────────────────────────
+	if strings.Contains(*domain, "://") || strings.Contains(*domain, "/") {
+		red.Println("[!] Invalid domain: must not contain protocol or path")
+		yellow.Println("[-] Example: cyclops -d example.com")
+		return
+	}
 
 	// ── ASCII Art (always shown first) ───────────────────────────────────────
 	logoOrange.Println(` 	  	 ██████╗██╗   ██╗ ██████╗██╗      ██████╗ ██████╗ ███████╗	`)
@@ -262,6 +279,11 @@ func main() {
 		Autotune:    *autotune,
 		Interactive: *interactive,
 		ReportCode:  reportCodeFn,
+		Extend:           *extend,
+		DirWordlistPath:  *wordlistDir,
+		InsecureSkipVerify: *insecure,
+		CheckpointDir:  *checkpointDir,
+		ResumeFrom:     *resumeFrom,
 	}
 
 	if *mode == "stealth" {
@@ -347,11 +369,9 @@ func main() {
 		return // Exit on error
 	} 
 
-	// If zero, print the warning and exit immediately
+	// If zero, warn but continue to host discovery
 	if len(subdomainsFound) == 0 {
-		red.Println("[!] No subdomains found.")
-		yellow.Println("[-] Make sure the domain is correct and try with less threads and different mode")
-		return 
+		yellow.Println("[-] No subdomains found via enumeration — proceeding to host discovery with base domain")
 	}
 
 	// Only prints if we actually have results
@@ -497,6 +517,10 @@ func runHostDiscovery(ctx context.Context, options models.ScanOptions, subds []m
 		urlsToProbe = append(urlsToProbe, "http://"+sub.Name)
 		urlsToProbe = append(urlsToProbe, "https://"+sub.Name)
 	}
+	if len(urlsToProbe) == 0 {
+		// Fallback: probe the base domain itself
+		urlsToProbe = []string{"http://" + options.Domain, "https://" + options.Domain}
+	}
 
 	results, err := probe.ProbeHosts(ctx, urlsToProbe, options.Threads)
 	if err != nil {
@@ -508,6 +532,7 @@ func runHostDiscovery(ctx context.Context, options models.ScanOptions, subds []m
 
 func runEndpointDiscovery(ctx context.Context, options models.ScanOptions, liveHosts []models.Host, s *spinner.Spinner) ([]models.Endpoint, error) {
 	var allEndpoints []models.Endpoint
+	seen := make(map[string]bool)
 
 	for _, host := range liveHosts {
 		spinnerMu.Lock()
@@ -520,10 +545,49 @@ func runEndpointDiscovery(ctx context.Context, options models.ScanOptions, liveH
 		robotsParser := endpoints.NewRobotsParser(options)
 
 		if crawledEndpoints, err := crawler.Crawl(ctx, host.URL); err == nil {
-			allEndpoints = append(allEndpoints, crawledEndpoints...)
+			for _, ep := range crawledEndpoints {
+				if !seen[ep.URL] {
+					seen[ep.URL] = true
+					allEndpoints = append(allEndpoints, ep)
+				}
+			}
 		}
 		if robotsEndpoints, err := robotsParser.ParseAll(ctx, host.URL); err == nil {
-			allEndpoints = append(allEndpoints, robotsEndpoints...)
+			for _, ep := range robotsEndpoints {
+				if !seen[ep.URL] {
+					seen[ep.URL] = true
+					allEndpoints = append(allEndpoints, ep)
+				}
+			}
+		}
+
+		if options.Extend {
+			spinnerMu.Lock()
+			if currentSpin == s {
+				s.Suffix = fmt.Sprintf("  Directory bruteforce... (%s)", host.URL)
+			}
+			spinnerMu.Unlock()
+
+			var wordlist []string
+			if options.DirWordlistPath != "" {
+				if data, err := os.ReadFile(options.DirWordlistPath); err == nil {
+					for _, line := range strings.Split(string(data), "\n") {
+						line = strings.TrimSpace(line)
+						if line != "" && !strings.HasPrefix(line, "#") {
+							wordlist = append(wordlist, line)
+						}
+					}
+				}
+			}
+			wb := endpoints.NewWordlistBruteforcer(options, wordlist)
+			if bfEndpoints, err := wb.Bruteforce(ctx, host.URL); err == nil {
+				for _, ep := range bfEndpoints {
+					if !seen[ep.URL] {
+						seen[ep.URL] = true
+						allEndpoints = append(allEndpoints, ep)
+					}
+				}
+			}
 		}
 	}
 
@@ -558,7 +622,11 @@ func outputResults(result models.Result, options models.ScanOptions) error {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
 		absPath, _ := os.Getwd()
-		white.Printf("[*] Results written to %s/%s\n", absPath, options.Output)
+		outPath := options.Output
+		if !filepath.IsAbs(outPath) && !strings.Contains(outPath, string(filepath.Separator)) {
+			outPath = filepath.Join(absPath, options.Output)
+		}
+		white.Printf("[*] Results written to %s\n", outPath)
 	} else {
 		if err := f.WriteToStdout(result); err != nil {
 			return fmt.Errorf("failed to write output to stdout: %w", err)

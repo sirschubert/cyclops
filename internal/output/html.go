@@ -70,7 +70,7 @@ details[open]>summary::before{content:"▼ "}
     {{range .Subdomains}}
     <div class="card">
       <div class="card-title">
-        <strong>{{.Name}}</strong>
+        <strong>{{.Name | escapeAttr}}</strong>
         {{if .IP}}<span class="meta-line">{{.IP}}</span>{{end}}
       </div>
       {{if .Sources}}<div class="meta-line">sources: {{range .Sources}}{{.}} {{end}}</div>{{end}}
@@ -82,7 +82,7 @@ details[open]>summary::before{content:"▼ "}
           {{range .Hosts}}
           <div class="card">
             <div class="card-title">
-              <a href="{{.URL}}" target="_blank" rel="noopener">{{.URL}}</a>
+              <a href="{{.URL | escapeAttr}}" target="_blank" rel="noopener">{{.URL | escapeAttr}}</a>
               <span class="badge {{.StatusCode | statusClass}}">{{.StatusCode}}</span>
             </div>
             {{if .Title}}<div class="meta-line">title: {{.Title}}</div>{{end}}
@@ -101,7 +101,7 @@ details[open]>summary::before{content:"▼ "}
                 {{range .Endpoints}}
                 <div class="card">
                   <div class="card-title">
-                    <a href="{{.URL}}" target="_blank" rel="noopener">{{.URL}}</a>
+                    <a href="{{.URL | escapeAttr}}" target="_blank" rel="noopener">{{.URL | escapeAttr}}</a>
                     {{if .StatusCode}}<span class="badge {{.StatusCode | statusClass}}">{{.StatusCode}}</span>{{end}}
                     <span class="meta-line">{{.Source}}</span>
                   </div>
@@ -136,8 +136,11 @@ var reportTemplate = template.Must(
 			case code >= 500:
 				return "s5xx"
 			default:
-				return "sunk"
+				return "unknown"
 			}
+		},
+		"escapeAttr": func(s string) string {
+			return template.HTMLEscapeString(s)
 		},
 		"fmtTime": func(t time.Time) string {
 			return t.UTC().Format("2006-01-02 15:04:05 UTC")
@@ -184,7 +187,7 @@ func (hf *HTMLFormatter) WriteToFile(result models.Result, filename string) erro
 	if err != nil {
 		return fmt.Errorf("failed to format HTML: %w", err)
 	}
-	return os.WriteFile(filename, data, 0644)
+	return os.WriteFile(filename, data, 0600)
 }
 
 // WriteToStdout writes the HTML result to stdout.

@@ -39,14 +39,16 @@ func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]strin
 
 	wg := &sync.WaitGroup{}
 
+	var skipBruteforce bool
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		subs, err := de.dnsResolver.Enumerate(ctx, domain, de.options)
+		subs, sf, err := de.dnsResolver.Enumerate(ctx, domain, de.options)
 		if err != nil {
 			errors <- fmt.Errorf("DNS enumeration failed: %v", err)
 			return
 		}
+		skipBruteforce = sf
 		results <- sourceResult{subdomains: subs, source: "dns"}
 	}()
 
@@ -61,7 +63,7 @@ func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]strin
 		results <- sourceResult{subdomains: subs, source: "cert"}
 	}()
 
-	if !de.options.PassiveOnly && de.options.Wordlist != "" {
+	if !de.options.PassiveOnly && de.options.Wordlist != "" && !skipBruteforce {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -84,14 +86,15 @@ func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]strin
 	var mu sync.Mutex
 
 	for sr := range results {
-		slog.Debug("subdomain source results", "source", sr.source, "count", len(sr.subdomains))
 		mu.Lock()
 		allSubdomains = append(allSubdomains, sr.subdomains...)
 		mu.Unlock()
 	}
 
+	var errCount int
 	for err := range errors {
-		slog.Debug("subdomain discovery partial failure", "err", err)
+		errCount++
+		slog.Warn("subdomain source failed", "err", err)
 	}
 
 	seen := make(map[string]bool, len(allSubdomains))
@@ -101,6 +104,10 @@ func (de *DiscoveryEngine) Discover(ctx context.Context, domain string) ([]strin
 			seen[s] = true
 			unique = append(unique, s)
 		}
+	}
+
+	if len(unique) == 0 && errCount > 0 {
+		return nil, fmt.Errorf("all subdomain sources failed")
 	}
 
 	return unique, nil

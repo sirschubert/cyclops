@@ -2,6 +2,7 @@ package endpoints
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -36,6 +37,9 @@ func NewCrawler(options models.ScanOptions) *Crawler {
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: options.InsecureSkipVerify,
+		},
 	}
 
 	client := &http.Client{

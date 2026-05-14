@@ -2,6 +2,7 @@ package endpoints
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -43,6 +44,9 @@ func NewWordlistBruteforcer(options models.ScanOptions, wordlist []string) *Word
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: options.InsecureSkipVerify,
+		},
 	}
 
 	client := &http.Client{

@@ -57,7 +57,7 @@ func NewHTTPProbeFromOptions(options models.ScanOptions) *HTTPProbe {
 		}).DialContext,
 		TLSHandshakeTimeout: time.Duration(timeout) * time.Second,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // scan tool must accept self-signed certs
+			InsecureSkipVerify: options.InsecureSkipVerify, // allow toggle via --insecure flag
 		},
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,

@@ -3,6 +3,7 @@ package subdomains
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -211,17 +212,17 @@ func (d *DNSResolver) PTRLookup(ctx context.Context, ip string) ([]string, error
 }
 
 // Enumerate performs comprehensive subdomain enumeration.
-func (d *DNSResolver) Enumerate(ctx context.Context, domain string, options models.ScanOptions) ([]string, error) {
+func (d *DNSResolver) Enumerate(ctx context.Context, domain string, options models.ScanOptions) ([]string, bool, error) {
 	var allSubdomains []string
 	var mu sync.Mutex
 
+	skipBruteforce := false
 	wildcard, _, err := d.DetectWildcard(ctx, domain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to detect wildcard: %v", err)
-	}
-
-	if wildcard && !options.PassiveOnly {
-		return nil, fmt.Errorf("wildcard DNS detected, brute force enumeration would be ineffective")
+		slog.Debug("wildcard detection failed", "domain", domain, "err", err)
+	} else if wildcard && !options.PassiveOnly {
+		skipBruteforce = true
+		slog.Debug("wildcard DNS detected, skipping brute force", "domain", domain)
 	}
 
 	recordTypes := []uint16{dns.TypeA, dns.TypeAAAA, dns.TypeCNAME, dns.TypeMX, dns.TypeNS, dns.TypeTXT}
@@ -233,7 +234,11 @@ func (d *DNSResolver) Enumerate(ctx context.Context, domain string, options mode
 		wg.Add(1)
 		go func(rt uint16) {
 			defer wg.Done()
-			results, _ := d.Resolve(domain, rt)
+			results, err := d.Resolve(domain, rt)
+			if err != nil {
+				slog.Debug("DNS resolve failed", "domain", domain, "type", rt, "err", err)
+				return
+			}
 			resultChan <- results
 		}(recordType)
 	}
@@ -250,13 +255,17 @@ func (d *DNSResolver) Enumerate(ctx context.Context, domain string, options mode
 	}
 
 	if !options.PassiveOnly {
-		zoneSubs, _ := d.ZoneTransfer(ctx, domain)
-		mu.Lock()
-		allSubdomains = append(allSubdomains, zoneSubs...)
-		mu.Unlock()
+		zoneSubs, err := d.ZoneTransfer(ctx, domain)
+		if err != nil {
+			slog.Debug("zone transfer failed", "domain", domain, "err", err)
+		} else {
+			mu.Lock()
+			allSubdomains = append(allSubdomains, zoneSubs...)
+			mu.Unlock()
+		}
 	}
 
-	return allSubdomains, nil
+	return allSubdomains, skipBruteforce, nil
 }
 
 // MultiResolver performs DNS brute-force using multiple nameservers in round-robin.
