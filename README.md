@@ -55,6 +55,7 @@ Go 1.22 or higher.
 - **Web Crawler** — breadth-first crawling with configurable depth
 - **robots.txt / sitemap.xml** — extract disallowed paths and nested sitemap entries
 - **Link Extraction** — follows `href`, `src`, and `form action` attributes
+- **Directory Bruteforce** — wordlist-based directory/file discovery via `-extend` flag
 
 ### Scan Modes
 Three built-in modes tune concurrency, rate, and stealth behaviour simultaneously:
@@ -98,6 +99,20 @@ cyclops -d example.com -autotune -v
 ```bash
 cyclops -d example.com -interactive
 ```
+
+### Directory bruteforce scan
+```bash
+cyclops -d example.com -extend -wordlist-dir /path/to/directories.txt -format json -o results.json
+```
+
+### Disable TLS verification (self-signed certs)
+```bash
+cyclops -d example.com -insecure -v
+```
+
+### Disable colored output
+```bash
+cyclops -d example.com -no-color -o results.txt
 
 ### Save as HTML report
 ```bash
@@ -145,8 +160,12 @@ cyclops -d example.com -proxy http://127.0.0.1:8080 -v
 | `-proxy` | HTTP proxy URL | — |
 | `-timeout` | Per-request timeout in seconds | 10 |
 | `-scan-timeout` | Total scan timeout in minutes (0 = no limit) | 30 |
-| `-user-agent` | Custom User-Agent string | `Cyclops/1.0` |
+| `-user-agent` | Custom User-Agent string | `Cyclops/1.1` |
 | `-v` | Verbose output | false |
+| `-extend` | Enable directory bruteforcing after crawl | false |
+| `-wordlist-dir` | Custom directory wordlist path | — |
+| `-insecure` | Disable TLS certificate verification | false |
+| `-no-color` | Disable colored output | false |
 
 ---
 
