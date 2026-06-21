@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
+	"github.com/sirschubert/cyclops/internal/checkpoint"
 	"github.com/sirschubert/cyclops/internal/endpoints"
 	"github.com/sirschubert/cyclops/internal/hosts"
 	outputfmt "github.com/sirschubert/cyclops/internal/output"
@@ -91,30 +93,36 @@ var stealthUserAgents = []string{
 // ── Flags ────────────────────────────────────────────────────────────────────
 
 var (
-	domain       = flag.String("d", "", "Target domain")
-	wordlistPath = flag.String("w", "", "Subdomain wordlist path")
-	threads      = flag.Int("t", 50, "Concurrent workers")
-	rate         = flag.Int("r", 500, "Max requests per second")
-	output       = flag.String("o", "", "Output file")
-	format       = flag.String("format", "text", "Output format: text, json, html, md")
-	depth        = flag.Int("depth", 2, "Crawl depth for endpoint discovery")
-	passiveOnly  = flag.Bool("passive-only", false, "Only use passive sources (no DNS brute force)")
-	proxy        = flag.String("proxy", "", "HTTP proxy URL")
-	verbose      = flag.Bool("v", false, "Verbose output")
-	timeout      = flag.Int("timeout", 10, "Per-request timeout in seconds")
-	scanTimeout  = flag.Int("scan-timeout", 30, "Total scan timeout in minutes (0 = no limit)")
-	userAgent    = flag.String("user-agent", "Cyclops/1.0", "User-Agent header")
-	resolvers    = flag.String("resolvers", "", "Comma-separated list of DNS resolvers")
-	mode         = flag.String("mode", "normal", "Scan mode: normal, stealth, aggressive")
-	autotune     = flag.Bool("autotune", false, "Dynamically adjust request rate based on server responses")
-	interactive  = flag.Bool("interactive", false, "Pause between phases to review and select targets")
+	domain        = flag.String("d", "", "Target domain")
+	wordlistPath  = flag.String("w", "", "Subdomain wordlist path")
+	threads       = flag.Int("t", 50, "Concurrent workers")
+	rate          = flag.Int("r", 500, "Max requests per second")
+	output        = flag.String("o", "", "Output file")
+	format        = flag.String("format", "text", "Output format: text, json, html, md")
+	depth         = flag.Int("depth", 2, "Crawl depth for endpoint discovery")
+	passiveOnly   = flag.Bool("passive-only", false, "Only use passive sources (no DNS brute force)")
+	proxy         = flag.String("proxy", "", "HTTP proxy URL")
+	verbose       = flag.Bool("v", false, "Verbose output")
+	timeout       = flag.Int("timeout", 10, "Per-request timeout in seconds")
+	scanTimeout   = flag.Int("scan-timeout", 30, "Total scan timeout in minutes (0 = no limit)")
+	userAgent     = flag.String("user-agent", "Cyclops/1.1", "User-Agent header")
+	resolvers     = flag.String("resolvers", "", "Comma-separated list of DNS resolvers")
+	mode          = flag.String("mode", "normal", "Scan mode: normal, stealth, aggressive")
+	autotune      = flag.Bool("autotune", false, "Dynamically adjust request rate based on server responses")
+	interactive   = flag.Bool("interactive", false, "Pause between phases to review and select targets")
 	extend        = flag.Bool("extend", false, "Enable directory bruteforcing after crawl")
 	wordlistDir   = flag.String("wordlist-dir", "", "Custom directory wordlist path")
 	insecure      = flag.Bool("insecure", false, "Disable TLS certificate verification")
 	noColor       = flag.Bool("no-color", false, "Disable colored output")
 	checkpointDir = flag.String("checkpoint-dir", "", "Directory for checkpoint files")
 	resumeFrom    = flag.String("resume", "", "Resume scan from checkpoint file")
+	blockMetadata = flag.Bool("block-metadata", false, "Block redirects to cloud metadata / link-local addresses (169.254.0.0/16)")
+	silent        = flag.Bool("silent", false, "Suppress banner and progress output (only emit results)")
+	showVersion   = flag.Bool("version", false, "Print version and exit")
 )
+
+// version is the current Cyclops release.
+const version = "1.1.0"
 
 // ── Active spinner tracking (for Ctrl+C handler) ─────────────────────────────
 
@@ -144,6 +152,12 @@ func stopSpinner(s *spinner.Spinner) {
 func main() {
 	flag.Parse()
 
+	// ── Version ────────────────────────────────────────────────────────────
+	if *showVersion {
+		fmt.Printf("cyclops v%s\n", version)
+		os.Exit(0)
+	}
+
 	// ── No-color ───────────────────────────────────────────────────────────
 	color.NoColor = *noColor
 
@@ -154,18 +168,19 @@ func main() {
 		return
 	}
 
-	// ── ASCII Art (always shown first) ───────────────────────────────────────
-	logoOrange.Println(` 	  	 ██████╗██╗   ██╗ ██████╗██╗      ██████╗ ██████╗ ███████╗	`)
-	logoOrange.Println(`		██╔════╝╚██╗ ██╔╝██╔════╝██║     ██╔═══██╗██╔══██╗██╔════╝  `)
-	logoGold.Println(`		██║      ╚████╔╝ ██║     ██║     ██║   ██║██████╔╝███████╗	`)
-	logoBlue.Println(`		██║       ╚██╔╝  ██║     ██║     ██║   ██║██╔═══╝ ╚════██║	`)
-	logoSteel.Println(`		╚██████╗   ██║   ╚██████╗███████╗╚██████╔╝██║     ███████║	`)
-	logoSteel.Println(`		 ╚═════╝   ╚═╝    ╚═════╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝	`)
-	fmt.Println()
+	// ── ASCII Art + quote (suppressed in silent mode) ────────────────────────
+	if !*silent {
+		logoOrange.Println(` 	  	 ██████╗██╗   ██╗ ██████╗██╗      ██████╗ ██████╗ ███████╗	`)
+		logoOrange.Println(`		██╔════╝╚██╗ ██╔╝██╔════╝██║     ██╔═══██╗██╔══██╗██╔════╝  `)
+		logoGold.Println(`		██║      ╚████╔╝ ██║     ██║     ██║   ██║██████╔╝███████╗	`)
+		logoBlue.Println(`		██║       ╚██╔╝  ██║     ██║     ██║   ██║██╔═══╝ ╚════██║	`)
+		logoSteel.Println(`		╚██████╗   ██║   ╚██████╗███████╗╚██████╔╝██║     ███████║	`)
+		logoSteel.Println(`		 ╚═════╝   ╚═╝    ╚═════╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝	`)
+		fmt.Println()
 
-	// ── Subnautica quote ──────────────────────────────────────────────────────
-	dimItal.Printf("  ~ \"%s\"\n", pickQuote(*mode))
-	fmt.Println()
+		dimItal.Printf("  ~ \"%s\"\n", pickQuote(*mode))
+		fmt.Println()
+	}
 
 	// ── No-args: print usage and exit cleanly ─────────────────────────────────
 	if *domain == "" {
@@ -210,6 +225,20 @@ func main() {
 		}
 		if !explicit["depth"] {
 			*depth = 4
+		}
+	}
+
+	// ── Infer output format from -o extension when -format not set ────────────
+	if !explicit["format"] && *output != "" {
+		switch strings.ToLower(filepath.Ext(*output)) {
+		case ".json":
+			*format = "json"
+		case ".html", ".htm":
+			*format = "html"
+		case ".md", ".markdown":
+			*format = "md"
+		case ".txt", ".text":
+			*format = "text"
 		}
 	}
 
@@ -262,28 +291,29 @@ func main() {
 
 	// ── Build options ─────────────────────────────────────────────────────────
 	options := models.ScanOptions{
-		Domain:      *domain,
-		Wordlist:    wordlist,
-		Threads:     *threads,
-		Rate:        *rate,
-		Output:      *output,
-		Format:      strings.ToLower(strings.TrimSpace(*format)),
-		Depth:       *depth,
-		PassiveOnly: *passiveOnly,
-		Proxy:       *proxy,
-		Verbose:     *verbose,
-		Timeout:     *timeout,
-		UserAgent:   *userAgent,
-		Resolvers:   resolverList,
-		Mode:        *mode,
-		Autotune:    *autotune,
-		Interactive: *interactive,
-		ReportCode:  reportCodeFn,
-		Extend:           *extend,
-		DirWordlistPath:  *wordlistDir,
+		Domain:             *domain,
+		Wordlist:           wordlist,
+		Threads:            *threads,
+		Rate:               *rate,
+		Output:             *output,
+		Format:             strings.ToLower(strings.TrimSpace(*format)),
+		Depth:              *depth,
+		PassiveOnly:        *passiveOnly,
+		Proxy:              *proxy,
+		Verbose:            *verbose,
+		Timeout:            *timeout,
+		UserAgent:          *userAgent,
+		Resolvers:          resolverList,
+		Mode:               *mode,
+		Autotune:           *autotune,
+		Interactive:        *interactive,
+		ReportCode:         reportCodeFn,
+		Extend:             *extend,
+		DirWordlistPath:    *wordlistDir,
 		InsecureSkipVerify: *insecure,
-		CheckpointDir:  *checkpointDir,
-		ResumeFrom:     *resumeFrom,
+		CheckpointDir:      *checkpointDir,
+		ResumeFrom:         *resumeFrom,
+		BlockMetadata:      *blockMetadata,
 	}
 
 	if *mode == "stealth" {
@@ -359,95 +389,165 @@ func main() {
 		}
 	}()
 
-	// ── Phase 1: Subdomain enumeration ────────────────────────────────────────
-	s := startSpinner("Enumerating subdomains...")
-	subdomainsFound, err := runSubdomainEnumeration(ctx, options)
-	stopSpinner(s)
-
-	if err != nil {
-		red.Fprintf(os.Stderr, "[!] Subdomain enumeration error: %v\n", err)
-		return // Exit on error
-	} 
-
-	// If zero, warn but continue to host discovery
-	if len(subdomainsFound) == 0 {
-		yellow.Println("[-] No subdomains found via enumeration — proceeding to host discovery with base domain")
-	}
-
-	// Only prints if we actually have results
-	result.Subdomains = subdomainsFound
-	green.Printf("[+] Found %d subdomains\n", len(subdomainsFound))
-
-	if *verbose {
-		for _, sub := range result.Subdomains {
-			white.Printf("    %s\n", sub.Name)
+	// ── Resume from checkpoint ────────────────────────────────────────────────
+	resumedRank := 0
+	if *resumeFrom != "" {
+		cp, err := checkpoint.Load(*resumeFrom)
+		if err != nil {
+			red.Fprintf(os.Stderr, "[!] Could not load checkpoint: %v\n", err)
+			os.Exit(1)
+		}
+		result = cp.Result
+		result.Domain = *domain
+		resumedRank = checkpoint.Rank(cp.Phase)
+		if !*silent {
+			cyan.Printf("[*] Resuming from checkpoint (completed phase: %s)\n", cp.Phase)
 		}
 	}
 
-	// Interactive: choose which subdomains to continue with.
-	if *interactive && len(result.Subdomains) > 0 {
-		if !promptContinue("host discovery") {
-			handleOutput(result, options, interrupted.Load(), wantSave.Load())
+	// saveCheckpoint persists progress after a phase when -checkpoint-dir is set.
+	saveCheckpoint := func(phase string) {
+		if *checkpointDir == "" {
 			return
 		}
-		result.Subdomains = interactiveSelectSubdomains(result.Subdomains)
+		path, err := checkpoint.Save(*checkpointDir, *domain, *mode, phase, result)
+		if err != nil {
+			slog.Warn("failed to write checkpoint", "err", err)
+			return
+		}
+		if !*silent {
+			dimItal.Fprintf(os.Stderr, "    checkpoint saved: %s\n", path)
+		}
+	}
+
+	// ── Phase 1: Subdomain enumeration ────────────────────────────────────────
+	if resumedRank < checkpoint.Rank(checkpoint.PhaseSubdomains) {
+		s := startSpinner("Enumerating subdomains...")
+		subdomainsFound, err := runSubdomainEnumeration(ctx, options)
+		stopSpinner(s)
+
+		if err != nil {
+			red.Fprintf(os.Stderr, "[!] Subdomain enumeration error: %v\n", err)
+			return // Exit on error
+		}
+
+		if !*silent {
+			green.Printf("[+] Found %d subdomains\n", len(subdomainsFound))
+		}
+
+		// If zero, fall back to the base domain so host discovery still has a
+		// target to probe and somewhere to attach the results.
+		if len(subdomainsFound) == 0 {
+			if !*silent {
+				yellow.Println("[-] No subdomains found via enumeration — proceeding to host discovery with base domain")
+			}
+			subdomainsFound = []models.Subdomain{{Name: *domain, Sources: []string{"base"}}}
+		}
+
+		if *verbose {
+			for _, sub := range subdomainsFound {
+				white.Printf("    %s\n", sub.Name)
+			}
+		}
+
+		// Interactive: choose which subdomains to continue with.
+		if *interactive && len(subdomainsFound) > 0 {
+			if !promptContinue("host discovery") {
+				result.Subdomains = subdomainsFound
+				handleOutput(result, options, interrupted.Load(), wantSave.Load())
+				return
+			}
+			subdomainsFound = interactiveSelectSubdomains(subdomainsFound)
+		}
+
+		result.Subdomains = subdomainsFound
+		saveCheckpoint(checkpoint.PhaseSubdomains)
+	} else if !*silent {
+		green.Printf("[+] Loaded %d subdomains from checkpoint\n", len(result.Subdomains))
 	}
 
 	// ── Phase 2: Host discovery ───────────────────────────────────────────────
-	s = startSpinner("Probing hosts...")
-	hostsFound, err := runHostDiscovery(ctx, options, result.Subdomains)
-	stopSpinner(s)
+	var hostsFound []models.Host
+	if resumedRank < checkpoint.Rank(checkpoint.PhaseHosts) {
+		s := startSpinner("Probing hosts...")
+		var err error
+		hostsFound, err = runHostDiscovery(ctx, options, result.Subdomains)
+		stopSpinner(s)
 
-	if err != nil {
-		red.Fprintf(os.Stderr, "[!] Host discovery error: %v\n", err)
-	} else {
-		for i, sub := range result.Subdomains {
-			for _, host := range hostsFound {
-				hostname := strings.TrimPrefix(host.URL, "http://")
-				hostname = strings.TrimPrefix(hostname, "https://")
-				if strings.HasPrefix(hostname, sub.Name) {
-					result.Subdomains[i].Hosts = append(result.Subdomains[i].Hosts, host)
-				}
-			}
-		}
-		green.Printf("[+] Found %d live hosts\n", len(hostsFound))
-	}
-
-	if *verbose {
-		for _, h := range hostsFound {
-			white.Printf("    %s [%d]\n", h.URL, h.StatusCode)
-		}
-	}
-
-	// Interactive: choose which hosts to crawl.
-	if *interactive && len(hostsFound) > 0 {
-		if !promptContinue("endpoint crawling") {
-			handleOutput(result, options, interrupted.Load(), wantSave.Load())
-			return
-		}
-		hostsFound = interactiveSelectHosts(hostsFound)
-	}
-
-	// ── Phase 3: Endpoint discovery ───────────────────────────────────────────
-	s = startSpinner("Crawling endpoints...")
-	endpointsFound, err := runEndpointDiscovery(ctx, options, hostsFound, s)
-	stopSpinner(s)
-
-	if err != nil {
-		red.Fprintf(os.Stderr, "[!] Endpoint discovery error: %v\n", err)
-	} else {
-		for i, sub := range result.Subdomains {
-			for j, host := range sub.Hosts {
-				for _, ep := range endpointsFound {
-					if strings.HasPrefix(ep.URL, host.URL) {
-						result.Subdomains[i].Hosts[j].Endpoints = append(
-							result.Subdomains[i].Hosts[j].Endpoints, ep,
-						)
+		if err != nil {
+			red.Fprintf(os.Stderr, "[!] Host discovery error: %v\n", err)
+		} else {
+			for i := range result.Subdomains {
+				name := strings.ToLower(result.Subdomains[i].Name)
+				result.Subdomains[i].Hosts = nil
+				for _, host := range hostsFound {
+					if urlHost(host.URL) == name {
+						result.Subdomains[i].Hosts = append(result.Subdomains[i].Hosts, host)
 					}
 				}
 			}
+			if !*silent {
+				green.Printf("[+] Found %d live hosts\n", len(hostsFound))
+			}
 		}
-		green.Printf("[+] Found %d endpoints\n", len(endpointsFound))
+
+		if *verbose {
+			for _, h := range hostsFound {
+				white.Printf("    %s [%d]\n", h.URL, h.StatusCode)
+			}
+		}
+
+		// Interactive: choose which hosts to crawl.
+		if *interactive && len(hostsFound) > 0 {
+			if !promptContinue("endpoint crawling") {
+				saveCheckpoint(checkpoint.PhaseHosts)
+				handleOutput(result, options, interrupted.Load(), wantSave.Load())
+				return
+			}
+			hostsFound = interactiveSelectHosts(hostsFound)
+		}
+
+		saveCheckpoint(checkpoint.PhaseHosts)
+	} else {
+		// Reconstruct the live-host list from the restored result.
+		for _, sub := range result.Subdomains {
+			hostsFound = append(hostsFound, sub.Hosts...)
+		}
+		if !*silent {
+			green.Printf("[+] Loaded %d live hosts from checkpoint\n", len(hostsFound))
+		}
+	}
+
+	// ── Phase 3: Endpoint discovery ───────────────────────────────────────────
+	if resumedRank < checkpoint.Rank(checkpoint.PhaseEndpoints) {
+		s := startSpinner("Crawling endpoints...")
+		endpointsFound, err := runEndpointDiscovery(ctx, options, hostsFound, s)
+		stopSpinner(s)
+
+		if err != nil {
+			red.Fprintf(os.Stderr, "[!] Endpoint discovery error: %v\n", err)
+		} else {
+			for i := range result.Subdomains {
+				for j := range result.Subdomains[i].Hosts {
+					hostURL := result.Subdomains[i].Hosts[j].URL
+					result.Subdomains[i].Hosts[j].Endpoints = nil
+					for _, ep := range endpointsFound {
+						if sameOrigin(ep.URL, hostURL) {
+							result.Subdomains[i].Hosts[j].Endpoints = append(
+								result.Subdomains[i].Hosts[j].Endpoints, ep,
+							)
+						}
+					}
+				}
+			}
+			if !*silent {
+				green.Printf("[+] Found %d endpoints\n", len(endpointsFound))
+			}
+		}
+
+		saveCheckpoint(checkpoint.PhaseEndpoints)
+	} else if !*silent {
+		cyan.Println("[*] Endpoints already complete (from checkpoint)")
 	}
 
 	// ── Output ────────────────────────────────────────────────────────────────
@@ -457,14 +557,18 @@ func main() {
 // handleOutput writes results or exits cleanly on cancel-without-save.
 func handleOutput(result models.Result, options models.ScanOptions, interrupted, wantSave bool) {
 	if interrupted && !wantSave {
-		yellow.Println("[!] Scan cancelled. No results saved.")
+		if !*silent {
+			yellow.Println("[!] Scan cancelled. No results saved.")
+		}
 		os.Exit(0)
 	}
 
-	if interrupted {
-		cyan.Println("[*] Saving partial results...")
-	} else {
-		cyan.Println("[*] Generating output...")
+	if !*silent {
+		if interrupted {
+			cyan.Println("[*] Saving partial results...")
+		} else {
+			cyan.Println("[*] Generating output...")
+		}
 	}
 
 	if err := outputResults(result, options); err != nil {
@@ -472,17 +576,23 @@ func handleOutput(result models.Result, options models.ScanOptions, interrupted,
 		os.Exit(1)
 	}
 
-	if interrupted {
-		green.Println("[*] Partial results saved.")
-	} else {
-		green.Println("[*] Scan complete.")
+	if !*silent {
+		if interrupted {
+			green.Println("[*] Partial results saved.")
+		} else {
+			green.Println("[*] Scan complete.")
+		}
 	}
 }
 
 // ── Spinner helper ────────────────────────────────────────────────────────────
 
 func newSpinner(label string) *spinner.Spinner {
-	s := spinner.New(spinner.CharSets[14], 80*time.Millisecond, spinner.WithWriter(os.Stderr))
+	w := io.Writer(os.Stderr)
+	if *silent {
+		w = io.Discard
+	}
+	s := spinner.New(spinner.CharSets[14], 80*time.Millisecond, spinner.WithWriter(w))
 	s.Suffix = "  " + label
 	s.Color("cyan")
 	return s
@@ -531,65 +641,113 @@ func runHostDiscovery(ctx context.Context, options models.ScanOptions, subds []m
 }
 
 func runEndpointDiscovery(ctx context.Context, options models.ScanOptions, liveHosts []models.Host, s *spinner.Spinner) ([]models.Endpoint, error) {
-	var allEndpoints []models.Endpoint
-	seen := make(map[string]bool)
+	if len(liveHosts) == 0 {
+		return nil, nil
+	}
 
-	for _, host := range liveHosts {
-		spinnerMu.Lock()
-		if currentSpin == s {
-			s.Suffix = fmt.Sprintf("  Crawling endpoints... (%s)", host.URL)
-		}
-		spinnerMu.Unlock()
+	// Share a single rate limiter across every host so that crawling hosts in
+	// parallel doesn't multiply the effective request rate past -r. When
+	// autotune is on, options.RateLimiter is already set and we reuse it.
+	if options.RateLimiter == nil {
+		options.RateLimiter = utils.NewRateLimiter(options.Rate)
+	}
 
-		crawler := endpoints.NewCrawler(options)
-		robotsParser := endpoints.NewRobotsParser(options)
-
-		if crawledEndpoints, err := crawler.Crawl(ctx, host.URL); err == nil {
-			for _, ep := range crawledEndpoints {
-				if !seen[ep.URL] {
-					seen[ep.URL] = true
-					allEndpoints = append(allEndpoints, ep)
+	// Load the directory wordlist once, up front, rather than per host.
+	var dirWordlist []string
+	if options.Extend && options.DirWordlistPath != "" {
+		if data, err := os.ReadFile(options.DirWordlistPath); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.HasPrefix(line, "#") {
+					dirWordlist = append(dirWordlist, line)
 				}
 			}
-		}
-		if robotsEndpoints, err := robotsParser.ParseAll(ctx, host.URL); err == nil {
-			for _, ep := range robotsEndpoints {
-				if !seen[ep.URL] {
-					seen[ep.URL] = true
-					allEndpoints = append(allEndpoints, ep)
-				}
-			}
-		}
-
-		if options.Extend {
-			spinnerMu.Lock()
-			if currentSpin == s {
-				s.Suffix = fmt.Sprintf("  Directory bruteforce... (%s)", host.URL)
-			}
-			spinnerMu.Unlock()
-
-			var wordlist []string
-			if options.DirWordlistPath != "" {
-				if data, err := os.ReadFile(options.DirWordlistPath); err == nil {
-					for _, line := range strings.Split(string(data), "\n") {
-						line = strings.TrimSpace(line)
-						if line != "" && !strings.HasPrefix(line, "#") {
-							wordlist = append(wordlist, line)
-						}
-					}
-				}
-			}
-			wb := endpoints.NewWordlistBruteforcer(options, wordlist)
-			if bfEndpoints, err := wb.Bruteforce(ctx, host.URL); err == nil {
-				for _, ep := range bfEndpoints {
-					if !seen[ep.URL] {
-						seen[ep.URL] = true
-						allEndpoints = append(allEndpoints, ep)
-					}
-				}
-			}
+		} else {
+			slog.Warn("could not read directory wordlist", "path", options.DirWordlistPath, "err", err)
 		}
 	}
+
+	// Crawl hosts concurrently. Stealth mode stays single-host to keep the scan
+	// quiet; otherwise fan out up to -t hosts at a time.
+	hostConcurrency := options.Threads
+	if options.Mode == "stealth" || hostConcurrency < 1 {
+		hostConcurrency = 1
+	}
+	if hostConcurrency > len(liveHosts) {
+		hostConcurrency = len(liveHosts)
+	}
+
+	var (
+		mu           sync.Mutex
+		seen         = make(map[string]bool)
+		allEndpoints []models.Endpoint
+		completed    int
+	)
+
+	add := func(eps []models.Endpoint) {
+		mu.Lock()
+		for _, ep := range eps {
+			if !seen[ep.URL] {
+				seen[ep.URL] = true
+				allEndpoints = append(allEndpoints, ep)
+			}
+		}
+		mu.Unlock()
+	}
+
+	jobs := make(chan models.Host)
+	var wg sync.WaitGroup
+	for i := 0; i < hostConcurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for host := range jobs {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				crawler := endpoints.NewCrawler(options)
+				robotsParser := endpoints.NewRobotsParser(options)
+
+				if eps, err := crawler.Crawl(ctx, host.URL); err == nil {
+					add(eps)
+				}
+				if eps, err := robotsParser.ParseAll(ctx, host.URL); err == nil {
+					add(eps)
+				}
+				if options.Extend {
+					wb := endpoints.NewWordlistBruteforcer(options, dirWordlist)
+					if eps, err := wb.Bruteforce(ctx, host.URL); err == nil {
+						add(eps)
+					}
+				}
+
+				mu.Lock()
+				completed++
+				done := completed
+				mu.Unlock()
+				spinnerMu.Lock()
+				if currentSpin == s {
+					s.Suffix = fmt.Sprintf("  Crawling endpoints... (%d/%d hosts)", done, len(liveHosts))
+				}
+				spinnerMu.Unlock()
+			}
+		}()
+	}
+
+	for _, h := range liveHosts {
+		select {
+		case jobs <- h:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return allEndpoints, ctx.Err()
+		}
+	}
+	close(jobs)
+	wg.Wait()
 
 	return allEndpoints, nil
 }
@@ -626,7 +784,9 @@ func outputResults(result models.Result, options models.ScanOptions) error {
 		if !filepath.IsAbs(outPath) && !strings.Contains(outPath, string(filepath.Separator)) {
 			outPath = filepath.Join(absPath, options.Output)
 		}
-		white.Printf("[*] Results written to %s\n", outPath)
+		if !*silent {
+			white.Printf("[*] Results written to %s\n", outPath)
+		}
 	} else {
 		if err := f.WriteToStdout(result); err != nil {
 			return fmt.Errorf("failed to write output to stdout: %w", err)
@@ -740,10 +900,31 @@ func interactiveSelectHosts(liveHosts []models.Host) []models.Host {
 	return selected
 }
 
+// ── URL matching helpers ──────────────────────────────────────────────────────
+
+// urlHost returns the lowercased hostname (without port) of a URL string.
+func urlHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// sameOrigin reports whether two URLs share the same scheme and host:port.
+func sameOrigin(a, b string) bool {
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+}
+
 // ── Default wordlist ──────────────────────────────────────────────────────────
 
 func getDefaultWordlist() []string {
-	return []string{
+	words := []string{
 		"www", "mail", "ftp", "localhost", "webmail", "smtp", "pop", "ns1", "ns2",
 		"ns3", "ns4", "api", "admin", "dev", "test", "blog", "cms", "shop", "forum",
 		"wiki", "docs", "login", "portal", "secure", "vpn", "mysql", "sql", "db",
@@ -779,4 +960,16 @@ func getDefaultWordlist() []string {
 		"codeigniter", "yii", "wordpress", "drupal", "joomla", "magento", "prestashop",
 		"shopify", "bigcommerce", "woocommerce", "opencart", "oscommerce", "virtuemart",
 	}
+
+	// Dedupe while preserving order — the literal list above has a few repeats
+	// (e.g. "admin") that would otherwise waste brute-force requests.
+	seen := make(map[string]bool, len(words))
+	unique := words[:0]
+	for _, w := range words {
+		if !seen[w] {
+			seen[w] = true
+			unique = append(unique, w)
+		}
+	}
+	return unique
 }

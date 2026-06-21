@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirschubert/cyclops/pkg/models"
 	"github.com/sirschubert/cyclops/internal/utils"
+	"github.com/sirschubert/cyclops/pkg/models"
 )
 
 // DefaultDirectoryWordlist returns a list of common web directory/file names
@@ -35,7 +35,7 @@ type WordlistBruteforcer struct {
 	userAgent   string
 	timeout     time.Duration
 	threads     int
-	rateLimiter *utils.RateLimiter
+	rateLimiter models.RateLimiterIface
 }
 
 // NewWordlistBruteforcer creates a new wordlist bruteforcer
@@ -64,6 +64,20 @@ func NewWordlistBruteforcer(options models.ScanOptions, wordlist []string) *Word
 	// Common extensions to try
 	extensions := []string{"", ".html", ".php", ".asp", ".aspx", ".jsp", ".cgi", ".bak", ".old", ".txt", ".zip", ".tar.gz", ".json", ".xml"}
 
+	// Share the rate limiter when one is provided (e.g. autotune or the
+	// endpoint phase's shared limiter) so concurrent hosts don't each run at
+	// the full -r rate. Otherwise fall back to a per-bruteforcer limiter.
+	var rl models.RateLimiterIface
+	if options.RateLimiter != nil {
+		rl = options.RateLimiter
+	} else {
+		rl = utils.NewRateLimiter(options.Rate)
+	}
+
+	if len(wordlist) == 0 {
+		wordlist = DefaultDirectoryWordlist()
+	}
+
 	return &WordlistBruteforcer{
 		client:      client,
 		wordlist:    wordlist,
@@ -71,7 +85,7 @@ func NewWordlistBruteforcer(options models.ScanOptions, wordlist []string) *Word
 		userAgent:   options.UserAgent,
 		timeout:     time.Duration(options.Timeout) * time.Second,
 		threads:     options.Threads,
-		rateLimiter: utils.NewRateLimiter(options.Rate),
+		rateLimiter: rl,
 	}
 }
 

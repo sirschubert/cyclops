@@ -48,13 +48,18 @@ func NewHTTPProbeFromOptions(options models.ScanOptions) *HTTPProbe {
 	}
 	userAgent := options.UserAgent
 	if userAgent == "" {
-		userAgent = "Cyclops/1.0"
+		userAgent = "Cyclops/1.1"
+	}
+
+	dialer := &net.Dialer{
+		Timeout: time.Duration(timeout) * time.Second,
+	}
+	if options.BlockMetadata {
+		dialer.Control = utils.MetadataDialControl
 	}
 
 	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout: time.Duration(timeout) * time.Second,
-		}).DialContext,
+		DialContext:         dialer.DialContext,
 		TLSHandshakeTimeout: time.Duration(timeout) * time.Second,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: options.InsecureSkipVerify, // allow toggle via --insecure flag
@@ -70,6 +75,9 @@ func NewHTTPProbeFromOptions(options models.ScanOptions) *HTTPProbe {
 		Transport: transport,
 		Timeout:   time.Duration(timeout) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if options.BlockMetadata && utils.IsMetadataHost(req.URL.Host) {
+				return fmt.Errorf("blocked redirect to metadata address: %s", req.URL.Host)
+			}
 			if len(via) >= 10 {
 				return http.ErrUseLastResponse
 			}
