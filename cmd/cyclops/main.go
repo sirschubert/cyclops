@@ -122,7 +122,7 @@ var (
 )
 
 // version is the current Cyclops release.
-const version = "1.1.0"
+const version = "1.2.0"
 
 // ── Active spinner tracking (for Ctrl+C handler) ─────────────────────────────
 
