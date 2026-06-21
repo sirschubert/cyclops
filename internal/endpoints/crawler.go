@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -42,9 +43,25 @@ func NewCrawler(options models.ScanOptions) *Crawler {
 		},
 	}
 
+	if options.BlockMetadata {
+		transport.DialContext = (&net.Dialer{Control: utils.MetadataDialControl}).DialContext
+	}
+
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   time.Duration(options.Timeout) * time.Second,
+	}
+
+	if options.BlockMetadata {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if utils.IsMetadataHost(req.URL.Host) {
+				return fmt.Errorf("blocked redirect to metadata address: %s", req.URL.Host)
+			}
+			if len(via) >= 10 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		}
 	}
 
 	if options.Proxy != "" {

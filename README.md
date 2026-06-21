@@ -16,213 +16,55 @@ A fast, all-in-one reconnaissance tool for bug bounty hunters and penetration te
 
 ---
 
-## Installation
+## Quick Start
 
-### go install (recommended)
+### Install
 ```bash
 go install github.com/sirschubert/cyclops/cmd/cyclops@latest
 ```
+Requires Go 1.25+.
 
-The binary will be placed in `$GOPATH/bin` (or `$HOME/go/bin`). Make sure that directory is on your `$PATH`.
+### Example Commands
 
-### From source
+**Basic scan:**
 ```bash
-git clone https://github.com/sirschubert/cyclops.git
-cd cyclops
-go build -o cyclops ./cmd/cyclops
+cyclops -d example.com
 ```
 
-### Requirements
-Go 1.22 or higher.
+**Stealth mode with JSON output:**
+```bash
+cyclops -d example.com -mode stealth -format json -o results.json
+```
+
+**Aggressive scan:**
+```bash
+cyclops -d example.com -mode aggressive -format html -o report.html
+```
 
 ---
 
 ## Features
 
-### Subdomain Enumeration
-- **Certificate Transparency** — query crt.sh for certificate-based subdomain discovery
-- **DNS Brute Force** — multi-threaded DNS resolution with a built-in or custom wordlist
-- **Zone Transfer** — attempt DNS zone transfers across all nameservers
-- **Wildcard Detection** — detects wildcard DNS records and skips useless brute force
-- **Multi-Resolver Support** — round-robin DNS resolution across multiple nameservers
-
-### Host Discovery
-- **HTTP/HTTPS Probing** — concurrent probing with configurable timeouts and redirect following
-- **Response Analysis** — status codes, page titles, headers, content length
-- **Technology Fingerprinting** — identify server software from response headers and body signatures
-
-### Endpoint Discovery
-- **Web Crawler** — breadth-first crawling with configurable depth
-- **robots.txt / sitemap.xml** — extract disallowed paths and nested sitemap entries
-- **Link Extraction** — follows `href`, `src`, and `form action` attributes
-- **Directory Bruteforce** — wordlist-based directory/file discovery via `-extend` flag
-
-### Scan Modes
-Three built-in modes tune concurrency, rate, and stealth behaviour simultaneously:
-
-| Mode | Workers | Rate | Depth | Extras |
-|------|---------|------|-------|--------|
-| `normal` (default) | 50 | 500 req/s | 2 | — |
-| `stealth` | 5 | 10 req/s | 2 | passive-only, 1–4 s random delay, browser UA rotation |
-| `aggressive` | 200 | 2000 req/s | 4 | all sources enabled |
-
-Explicit `-t`, `-r`, or `-depth` flags always override mode defaults.
-
-### Interactive Mode
-`-interactive` pauses between each phase so you can review results and pick which targets to continue with — useful for large scopes where you want to focus on specific subdomains or hosts before crawling.
+- **Subdomain Enumeration** — Certificate Transparency, DNS brute force, zone transfers, wildcard detection, and multi-resolver support
+- **Host Discovery** — HTTP/HTTPS probing with response analysis and technology fingerprinting
+- **Endpoint Discovery** — Web crawling with robots.txt/sitemap.xml extraction and directory bruteforce
+- **Scan Modes** — Tuned presets: `normal`, `stealth` (passive, slow), and `aggressive` (fast)
+- **Checkpoint & Resume** — Save progress with `-checkpoint-dir`, resume with `-resume`
+- **SSRF Metadata Guard** — Block connections to cloud-metadata and link-local addresses
+- **Silent Mode** — Clean, pipeable output for scripting
+- **Multiple Output Formats** — text, JSON, HTML, and Markdown
 
 ---
 
-## Usage
+## Documentation
 
-### Basic scan
-```bash
-cyclops -d example.com
-```
+For detailed setup, usage, and configuration:
 
-### Stealth scan — passive sources only, slow and quiet
-```bash
-cyclops -d example.com -mode stealth -format json -o results.json
-```
-
-### Aggressive scan — maximum speed
-```bash
-cyclops -d example.com -mode aggressive -format html -o report.html
-```
-
-### Auto-tune the rate limiter
-```bash
-cyclops -d example.com -autotune -v
-```
-
-### Interactive mode — review and select between phases
-```bash
-cyclops -d example.com -interactive
-```
-
-### Directory bruteforce scan
-```bash
-cyclops -d example.com -extend -wordlist-dir /path/to/directories.txt -format json -o results.json
-```
-
-### Disable TLS verification (self-signed certs)
-```bash
-cyclops -d example.com -insecure -v
-```
-
-### Disable colored output
-```bash
-cyclops -d example.com -no-color -o results.txt
-
-### Save as HTML report
-```bash
-cyclops -d example.com -format html -o report.html
-```
-
-### Save as Markdown
-```bash
-cyclops -d example.com -format md -o report.md
-```
-
-### Save as JSON
-```bash
-cyclops -d example.com -format json -o results.json
-```
-
-### Custom wordlist and resolvers
-```bash
-cyclops -d example.com -w wordlists/custom.txt -resolvers "8.8.8.8,1.1.1.1,9.9.9.9"
-```
-
-### Through a proxy with verbose output
-```bash
-cyclops -d example.com -proxy http://127.0.0.1:8080 -v
-```
-
----
-
-## Options
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `-d` | Target domain **(required)** | — |
-| `-mode` | Scan mode: `normal`, `stealth`, `aggressive` | `normal` |
-| `-t` | Concurrent workers | 50 |
-| `-r` | Max requests per second | 500 |
-| `-depth` | Crawl depth for endpoint discovery | 2 |
-| `-autotune` | Dynamically adjust rate based on server responses | false |
-| `-interactive` | Pause between phases to review and select targets | false |
-| `-passive-only` | Skip DNS brute force (passive sources only) | false |
-| `-w` | Subdomain wordlist file | built-in |
-| `-resolvers` | Comma-separated DNS resolvers (e.g. `8.8.8.8,1.1.1.1`) | `8.8.8.8:53` |
-| `-format` | Output format: `text`, `json`, `html`, `md` | `text` |
-| `-o` | Output file (default: stdout) | — |
-| `-proxy` | HTTP proxy URL | — |
-| `-timeout` | Per-request timeout in seconds | 10 |
-| `-scan-timeout` | Total scan timeout in minutes (0 = no limit) | 30 |
-| `-user-agent` | Custom User-Agent string | `Cyclops/1.1` |
-| `-v` | Verbose output | false |
-| `-extend` | Enable directory bruteforcing after crawl | false |
-| `-wordlist-dir` | Custom directory wordlist path | — |
-| `-insecure` | Disable TLS certificate verification | false |
-| `-no-color` | Disable colored output | false |
-
----
-
-## Output examples
-
-### Text (default)
-```
-╔══════════════════════════════════════╗
-║       Cyclops Scan Report            ║
-╚══════════════════════════════════════╝
-
-  Target     : example.com
-  Mode       : normal
-  Scan Time  : 2026-04-24 08:59:30 UTC
-  Subdomains : 1
-  Live Hosts : 1
-  Endpoints  : 1
-
-┌─ [SUBDOMAIN] www.example.com
-│   IP      : 93.184.216.34
-│   Sources : mixed
-│
-└── [HOST] https://www.example.com  [200]
-      Title  : Example Domain
-      Server : nginx
-      Tech   : Nginx, WordPress
-      Size   : 1256 bytes
-      ↳ https://www.example.com/robots.txt  [200]  (robots)
-```
-
-### JSON (`-format json`)
-```json
-{
-  "domain": "example.com",
-  "scan_time": "2026-04-24T08:59:30Z",
-  "scan_mode": "normal",
-  "subdomains": [
-    {
-      "subdomain": "www.example.com",
-      "sources": ["mixed"],
-      "hosts": [
-        {
-          "url": "https://www.example.com",
-          "status_code": 200,
-          "title": "Example Domain",
-          "server": "nginx",
-          "tech": ["Nginx", "WordPress"],
-          "content_length": 1256,
-          "endpoints": [
-            { "url": "https://www.example.com/robots.txt", "status_code": 200, "source": "robots" }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
+- [Installation](https://github.com/sirschubert/cyclops/wiki/Installation)
+- [Usage & Examples](https://github.com/sirschubert/cyclops/wiki/Usage)
+- [Options Reference](https://github.com/sirschubert/cyclops/wiki/Options-Reference)
+- [Output Formats](https://github.com/sirschubert/cyclops/wiki/Output-Formats)
+- [Advanced Features](https://github.com/sirschubert/cyclops/wiki/Advanced-Features)
 
 ---
 
